@@ -1,0 +1,256 @@
+from __future__ import annotations
+
+"""
+Ollama LLM Provider.
+
+Connects to a local Ollama instance for language model inference.
+Supports any model available in Ollama (Llama, Qwen, Mistral, etc.)
+"""
+
+import json
+import logging
+import re
+import time
+from typing import AsyncIterator
+
+import httpx
+
+from src.core.interfaces.llm import LLMProvider, LLMResponse
+
+logger = logging.getLogger(__name__)
+
+
+class OllamaLLMProvider(LLMProvider):
+    """
+    LLM Provider using Ollama's REST API.
+
+    Swap models by changing config — no code changes needed.
+    """
+
+    def __init__(self):
+        self.model: str = "llama3.1:8b"
+        self.base_url: str = "http://localhost:11434"
+        self.think: bool = False
+        self.client: httpx.AsyncClient | None = None
+
+    async def initialize(self, config: dict) -> None:
+        self.model = config.get("model", "llama3.1:8b")
+        self.base_url = config.get("base_url", "http://localhost:11434")
+        self.think = config.get("think", False)
+        self.client = httpx.AsyncClient(
+            base_url=self.base_url,
+            timeout=httpx.Timeout(600.0, connect=10.0),  # 10min for large models
+        )
+
+        # Verify Ollama is running and model is available
+        try:
+            resp = await self.client.get("/api/tags")
+            resp.raise_for_status()
+            models = [m["name"] for m in resp.json().get("models", [])]
+
+            # Check if model is pulled (handle tag variations)
+            model_base = self.model.split(":")[0]
+            available = any(model_base in m for m in models)
+
+            if not available:
+                logger.warning(
+                    f"Model '{self.model}' may not be available. "
+                    f"Pull it with: ollama pull {self.model}"
+                )
+            else:
+                logger.info(f"Ollama connected. Model: {self.model}")
+        except httpx.ConnectError:
+            logger.error(
+                "Cannot connect to Ollama. Is it running? "
+                "Start with: ollama serve"
+            )
+            raise
+
+    async def generate(
+        self,
+        system_prompt: str,
+        messages: list[dict],
+        temperature: float = 0.7,
+        max_tokens: int = 512,
+    ) -> LLMResponse:
+        start_time = time.time()
+
+        # Build messages list with system prompt
+        full_messages = [{"role": "system", "content": system_prompt}]
+        full_messages.extend(messages)
+
+        payload = {
+            "model": self.model,
+            "messages": full_messages,
+            "stream": False,
+            "think": self.think,  # Configurable thinking mode
+            "options": {
+                "temperature": temperature,
+                "num_predict": max_tokens,
+            },
+        }
+
+        resp = await self.client.post("/api/chat", json=payload)
+        resp.raise_for_status()
+        data = resp.json()
+
+        raw_text = data.get("message", {}).get("content", "")
+        generation_time = (time.time() - start_time) * 1000
+
+        # Strip any leaked thinking blocks, then parse emotion tag
+        raw_text = self._strip_thinking(raw_text)
+        emotion, clean_text = self._parse_emotion(raw_text)
+
+        # Calculate tokens
+        eval_count = data.get("eval_count", 0)
+
+        return LLMResponse(
+            text=clean_text,
+            emotion=emotion,
+            generation_time_ms=generation_time,
+            tokens_generated=eval_count,
+        )
+
+    async def stream_generate(
+        self,
+        system_prompt: str,
+        messages: list[dict],
+        temperature: float = 0.7,
+        max_tokens: int = 512,
+    ) -> AsyncIterator[str]:
+        full_messages = [{"role": "system", "content": system_prompt}]
+        full_messages.extend(messages)
+
+        payload = {
+            "model": self.model,
+            "messages": full_messages,
+            "stream": True,
+            "think": self.think,  # Configurable thinking mode
+            "options": {
+                "temperature": temperature,
+                "num_predict": max_tokens,
+            },
+        }
+
+        async with self.client.stream("POST", "/api/chat", json=payload) as resp:
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if line:
+                    try:
+                        data = json.loads(line)
+                        content = data.get("message", {}).get("content", "")
+                        if content:
+                            yield content
+                    except json.JSONDecodeError:
+                        continue
+
+    async def stream_generate_with_metadata(
+        self,
+        system_prompt: str,
+        messages: list[dict],
+        temperature: float = 0.7,
+        max_tokens: int = 512,
+    ) -> AsyncIterator[str | LLMResponse]:
+        """
+        Stream text chunks, then yield a final LLMResponse with metadata.
+
+        Yields:
+            str chunks as they arrive, then a single LLMResponse as the last item.
+        """
+        start_time = time.time()
+        full_messages = [{"role": "system", "content": system_prompt}]
+        full_messages.extend(messages)
+
+        payload = {
+            "model": self.model,
+            "messages": full_messages,
+            "stream": True,
+            "think": self.think,  # Configurable thinking mode
+            "options": {
+                "temperature": temperature,
+                "num_predict": max_tokens,
+            },
+        }
+
+        accumulated_text = ""
+        eval_count = 0
+        first_token_time = None
+
+        async with self.client.stream("POST", "/api/chat", json=payload) as resp:
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if line:
+                    try:
+                        data = json.loads(line)
+                        content = data.get("message", {}).get("content", "")
+                        if content:
+                            if first_token_time is None:
+                                first_token_time = time.time()
+                            accumulated_text += content
+                            yield content
+                        # Capture token count from the final chunk
+                        if data.get("done", False):
+                            eval_count = data.get("eval_count", 0)
+                    except json.JSONDecodeError:
+                        continue
+
+        # After streaming completes, parse and yield final metadata
+        generation_time = (time.time() - start_time) * 1000
+        ttft = ((first_token_time - start_time) * 1000) if first_token_time else generation_time
+        accumulated_text = self._strip_thinking(accumulated_text)
+        emotion, clean_text = self._parse_emotion(accumulated_text)
+
+        yield LLMResponse(
+            text=clean_text,
+            emotion=emotion,
+            generation_time_ms=generation_time,
+            first_token_time_ms=ttft,
+            tokens_generated=eval_count,
+        )
+
+    async def get_model_info(self) -> dict:
+        resp = await self.client.post(
+            "/api/show", json={"name": self.model}
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return {
+            "name": self.model,
+            "parameters": data.get("details", {}).get("parameter_size", "unknown"),
+            "family": data.get("details", {}).get("family", "unknown"),
+            "quantization": data.get("details", {}).get("quantization_level", "unknown"),
+        }
+
+    async def shutdown(self) -> None:
+        if self.client:
+            await self.client.aclose()
+
+    @staticmethod
+    def _strip_thinking(text: str) -> str:
+        """
+        Strip Qwen 3.5 thinking blocks from response.
+
+        Qwen 3.5 wraps internal reasoning in <think>...</think> tags.
+        We remove these so only the spoken response remains.
+        """
+        # Remove <think>...</think> blocks (including multiline)
+        cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+        return cleaned.strip()
+
+    @staticmethod
+    def _parse_emotion(text: str) -> tuple[str | None, str]:
+        """
+        Parse emotion tag from LLM response.
+
+        Searches for [emotion] tag anywhere in text — handles models
+        that output reasoning before the actual response.
+
+        Input:  "Some reasoning... [warm, nostalgic] I remember when..."
+        Output: ("warm, nostalgic", "I remember when...")
+        """
+        match = re.search(r"\[([^\]]+)\]\s*(.+)", text, re.DOTALL)
+        if match:
+            emotion = match.group(1).strip()
+            clean_text = match.group(2).strip()
+            return emotion, clean_text
+        return None, text.strip()

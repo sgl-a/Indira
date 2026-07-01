@@ -1,0 +1,78 @@
+# ─── Python ───
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+*.whl
+
+# ─── Virtual Environments ───
+.venv/
+venv/
+ENV/
+.python-version
+
+# ─── IDE / Editor ───
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ─── OS Files ───
+.DS_Store
+*.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# ─── Audio Files (voice profiles tracked separately) ───
+*.wav
+*.mp3
+*.aiff
+*.aif
+*.flac
+*.ogg
+*.m4a
+
+# ─── Video / Image (generated content) ───
+*.mp4
+*.avi
+*.mov
+*.webm
+
+# ─── AI Models (too large for git) ───
+models/
+*.bin
+*.gguf
+*.ggml
+*.pt
+*.pth
+*.onnx
+*.safetensors
+*.h5
+
+# ─── Project Data ───
+data/
+logs/
+*.log
+*.jsonl
+
+# ─── Secrets & Config Overrides ───
+.env
+.env.*
+config/local.yaml
+config/secrets.yaml
+
+# ─── Jupyter (if used for experiments) ───
+.ipynb_checkpoints/
+
+# ─── Testing ───
+.pytest_cache/
+.coverage
+htmlcov/

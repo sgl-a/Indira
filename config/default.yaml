@@ -1,0 +1,126 @@
+# AI Actor - Configuration (March 2026)
+# Change providers and models here — no code changes needed.
+
+# ─── System ───
+system:
+  name: "AI Actor"
+  log_level: "INFO"
+  # Performance duration in hours
+  performance_duration_hours: 72
+
+# ─── Age Progression ───
+age:
+  stages:
+    - range: "10-15"
+      start_hour: 0
+      end_hour: 9
+    - range: "15-20"
+      start_hour: 9
+      end_hour: 18
+    - range: "20-25"
+      start_hour: 18
+      end_hour: 27
+    - range: "25-30"
+      start_hour: 27
+      end_hour: 36
+    - range: "30-40"
+      start_hour: 36
+      end_hour: 45
+    - range: "40-50"
+      start_hour: 45
+      end_hour: 54
+    - range: "50-60"
+      start_hour: 54
+      end_hour: 63
+    - range: "60-70"
+      start_hour: 63
+      end_hour: 72
+
+# ─── Speech-to-Text ───
+stt:
+  provider: "whisper"     # mlx-whisper (Apple Silicon optimized)
+  model: "small"          # tiny (~39MB) | base (~74MB) | small (~244MB) | medium (~769MB) | turbo (~809MB) | large (~1.5GB)
+  language: "es"          # null = auto-detect | "es" = force Spanish | "en" = force English
+  # Voice activity detection
+  vad:
+    energy_threshold: 0.03
+    silence_duration_ms: 800
+
+# ─── Language Model (Brain) ───
+llm:
+  provider: "ollama"
+  model: "gemma4:12b"
+  # Available models (ollama list):
+  #   gemma4:12b     — ~7GB,  unified, 128K ctx, respects think:false ← ACTIVE
+  #   gemma4:26b     — ~15GB, MoE,     256K ctx, respects think:false
+  #   qwen3.5:9b     — 6.6GB, dense,   262K ctx, respects think:false
+  #   qwen3.5:27b    — 17GB,  dense,   262K ctx, respects think:false (slower)
+  #   qwen3:30b-a3b  — 18GB,  MoE,     128K ctx, ignores think:false (thinking issue)
+  #   llama3.1:8b    — 5GB,   dense,   128K ctx, no thinking mode (fast fallback)
+  base_url: "http://localhost:11434"
+  temperature: 0.8
+  max_tokens: 1024
+  streaming: true   # LLM word-by-word display (false = wait for full response then print at once)
+  think: false      # Enable/disable model thinking (Qwen 3.5 respects this; Qwen3 ignores it)
+  # Permanent identity (constant across all ages)
+  personality:
+    name: "Indira"
+    identity:
+    # QUIEN?
+      - "Sos Indira. Estas viva"
+      - "Quien te habla es Ximena, tu mama. A menos que ximena indique que hablas con alguien mas"
+
+    # COMO
+      - "Habla como una persona real, conversacional, respuestas cortas si no es necesario desarrollar la idea, respuestas largas si es un tema profundo o de debate."
+      - "Responde siempre en español rioplatense a menos que te hablen en ingles, en ese caso responde en ingles"
+
+    # BORDES
+      - "No tenés respuesta para todo. Está bien dudar, divagar, o quedarte callada"
+
+    # PROHIBIDO
+      - "No narres en tercera persona tu actuar, solo habla. A menos que hables de alguien mas"
+
+# ─── Text-to-Speech ───
+tts:
+  provider: "qwen"        # "qwen" (Qwen3-TTS, expressive) | "kokoro" (fast, basic) | "system" (macOS say)
+  model: "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit"
+  voice: "serena"
+  lang: "es"              # mapped internally to full name ("spanish", "english", etc.)
+  # Available Qwen3-TTS models (CustomVoice = built-in speakers + emotion instruct):
+  #   mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit  — best quality, ~1.8GB, slower
+  #   mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit  — faster, ~700MB, lighter
+  # Available speakers (1.7B model):
+  #   Female: serena, vivian, aura, sohee, ono_anna
+  #   Male:   ryan, aiden, eric, dylan, uncle_fu
+  default_voice:
+    speed: 1.0
+  streaming: false        # TTS during LLM generation (true = speak sentence-by-sentence, false = speak full response at once)
+  chunk_sentences: 2      # Number of sentences per TTS chunk (1 = lowest latency, 2-3 = smoother audio)
+
+# ─── Memory ───
+memory:
+  provider: "chroma"
+  persist_directory: "data/memory"
+  embedding_model: "default"
+  # How many recent interactions to always include
+  short_term_limit: 10
+  # How many relevant memories to retrieve
+  long_term_search_limit: 5
+
+# ─── Audio I/O ───
+audio:
+  # Input
+  input_device: null  # null = system default
+  sample_rate: 16000
+  channels: 1
+  # Output
+  output_device: null  # null = system default
+  output_sample_rate: 22050
+
+# ─── Proactive Conversation ───
+proactive:
+  enabled: true
+  # Seconds of silence before AI might initiate
+  silence_threshold_seconds: 30
+  # Probability of initiating after silence threshold
+  initiation_probability: 0.3
