@@ -6,6 +6,8 @@ A multimodal AI theatrical performance system for a 72-hour durational installat
 
 The AI entity can act and interact with a live actress over 72 hours. It ages in real-time, evolving from childhood (10) to old age (70), while maintaining character, conveying emotion, and performing as a theatrical actor.
 
+> **Status (2026-06-30):** Working today = an **audio/text conversational actor** (STT → LLM → TTS, memory, aging personality). Vision (cameras), the visual **avatar/projection**, and proactive behavior are **designed but not yet built** — the year-end 2026 target is the full system. See status tags in [ARCHITECTURE.md](ARCHITECTURE.md) and [TODO.md](TODO.md).
+
 ### Architecture
 
 The system follows a **provider pattern** — every component is swappable via configuration:
@@ -81,6 +83,7 @@ python3 -m src.main
 | `/status` | Show age, emotion, memory count, conversation turns |
 | `/age N` | Set character to N years old (e.g., `/age 25` to jump to the 25-30 age stage) |
 | `/memory` | View recent stored memories |
+| `/lobotomy` | Erase all stored memories |
 | `/help` | Show all commands |
 | `/quit` | Exit gracefully |
 

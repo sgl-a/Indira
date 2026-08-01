@@ -1,7 +1,14 @@
 # AI Actor - System Architecture
 
-> **Last Updated**: 2026-02-01  
-> **Status**: Draft / Planning
+> **Last Updated**: 2026-06-30  
+> **Status**: Living document — mixes the **target design** with the **current implementation**.
+
+> ⚠️ **Read this first.** This document describes the *originally designed* full system. A large part of it is **not built yet**. Components are tagged with their real status:
+> - ✅ **Implemented** — exists and works in `src/`
+> - 🟡 **Partial** — code exists but incomplete or not wired in
+> - 🔜 **Planned** — designed here, **not yet in code**
+>
+> **Year-end 2026 target:** the full designed system (perception + cognition + avatar + audio). **Today the working system is audio/text only.** See the per-section tags below, the summary table, and [TODO.md](TODO.md).
 
 ---
 
@@ -11,7 +18,33 @@ This document describes the system architecture for a 72-hour AI theatrical perf
 
 ---
 
+## Implementation Status (2026-06-30)
+
+| Layer | Component | Status |
+|-------|-----------|--------|
+| Perception | Microphone → STT (mlx-whisper) + VAD | ✅ Implemented |
+| Perception | Camera / face detection / recognition | 🔜 Planned |
+| Perception | Visual emotion detection / speaker ID | 🔜 Planned |
+| Cognition | Orchestrator (conversation loop) | ✅ Implemented |
+| Cognition | LLM brain (Ollama, streaming, emotion tags) | ✅ Implemented |
+| Cognition | Memory (Chroma semantic + simple keyword) | ✅ Implemented |
+| Cognition | Age engine (8 stages, prompt building) | ✅ Implemented |
+| Cognition | Decision engine / proactive initiation | 🟡 Config + stub only, not started |
+| Output | TTS → speaker (Qwen3-TTS / Kokoro / system) | ✅ Implemented |
+| Output | Age-based voice change | 🟡 Designed, not applied (single voice today) |
+| Output | Avatar / face animation / lip-sync | 🔜 Planned |
+| Output | Video output / projection / smoke screen | 🔜 Planned |
+| Reliability | A/V sync | 🔜 Planned |
+| Reliability | Watchdog / failure recovery | 🔜 Planned |
+| Reliability | 72-hour endurance validation | 🔜 Planned |
+
+> The diagrams below show the **full target design**. Anything not ✅ above is aspirational and is tagged 🔜/🟡 at its section.
+
+---
+
 ## High-Level Data Flow
+
+> 🟡 **Status:** The audio path (mic → STT → orchestrator → LLM → TTS → speakers) is ✅ implemented. Camera/CV inputs and avatar/projector outputs are 🔜 planned. The diagram names XTTS, but the code uses **Qwen3-TTS / Kokoro**.
 
 ```mermaid
 flowchart TB
@@ -84,6 +117,8 @@ flowchart TB
 
 ### 1. Perception Pipeline
 
+> 🟡 **Partial.** Audio path ✅ (mic capture, energy-based VAD, mlx-whisper STT, anti-hallucination filtering — see `orchestrator.run_voice_mode`). Vision path (face detection/recognition, visual emotion, speaker ID) 🔜 not built.
+
 ```mermaid
 flowchart LR
     subgraph INPUT ["Raw Input"]
@@ -123,6 +158,8 @@ flowchart LR
 ---
 
 ### 2. Cognition Pipeline
+
+> ✅ **Mostly implemented.** Orchestrator, context building (age prompt + memory retrieval), LLM call, response parsing, and memory write all exist. The "Decision Engine / should-respond / initiate" box is 🔜 not built — every input currently gets a response. Diagram says Qwen 2.5 32B; the configured default is **Gemma 4 12B**.
 
 ```mermaid
 flowchart TB
@@ -203,6 +240,8 @@ flowchart TB
 
 ### 3. Output Pipeline
 
+> 🟡 **Partial.** TTS path ✅ (Qwen3-TTS / Kokoro / system → `afplay`, with an overlapping streaming pipeline). Age-based voice selection is 🟡 designed but not applied (one voice today). Avatar generation, lip-sync, A/V sync, and projection are 🔜 not built.
+
 ```mermaid
 flowchart TB
     subgraph LLM_OUTPUT ["From Cognition"]
@@ -263,6 +302,8 @@ flowchart TB
 
 ### 4. Memory System
 
+> ✅ **Implemented** (Chroma semantic + simple keyword). Short-term = recent conversation history; long-term = vector DB in `data/memory/`; emotional tagging via `emotional_tag`; milestones stored on age transitions. Importance scoring is 🔜 (currently a fixed `0.5`).
+
 ```mermaid
 flowchart TB
     subgraph MEMORY_INPUT ["Memory Inputs"]
@@ -319,6 +360,8 @@ flowchart TB
 ---
 
 ### 5. Age Progression System
+
+> ✅ **Implemented.** Time-based 8-stage progression, per-stage personality from `profiles/`, system-prompt building, and `/age` time-travel. Voice-profile switching 🟡 (paths loaded, not applied by TTS); face-profile switching 🔜 (no avatar yet).
 
 ```mermaid
 flowchart LR
@@ -409,6 +452,8 @@ sequenceDiagram
 
 ## Proactive Conversation Initiation
 
+> 🔜 **Planned / stub only.** A `proactive:` config block and an `_proactive_task` attribute exist, but no initiation logic runs. The AI only responds when spoken to.
+
 ```mermaid
 flowchart TB
     subgraph TRIGGERS ["Initiation Triggers"]
@@ -445,6 +490,8 @@ flowchart TB
 ---
 
 ## Failure & Recovery
+
+> 🔜 **Planned.** No watchdog, heartbeat, or automatic recovery exists yet. Critical for the 72-hour run.
 
 ```mermaid
 flowchart TB

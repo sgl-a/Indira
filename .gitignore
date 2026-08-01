@@ -76,3 +76,9 @@ config/secrets.yaml
 .pytest_cache/
 .coverage
 htmlcov/
+REQUIREMENTS.md
+TECH_STACK.md
+TODO.md
+BUDGET.md
+brief-captura-de-voz.md
+TECH_STACK.md
