@@ -198,7 +198,7 @@ class QwenTTSProvider(TTSProvider):
             raise RuntimeError("Qwen3-TTS not initialized")
 
         # Use generate_custom_voice() for consistent named speaker + emotion
-        logger.info(
+        logger.debug(
             f"Qwen3-TTS generate: speaker={self._voice}, lang={self._lang_code}, "
             f"instruct='{instruct}'"
         )

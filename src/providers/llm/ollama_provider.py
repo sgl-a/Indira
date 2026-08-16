@@ -20,6 +20,61 @@ from src.core.interfaces.llm import LLMProvider, LLMResponse
 logger = logging.getLogger(__name__)
 
 
+class _ThinkTagFilter:
+    """
+    Incrementally strips <think>...</think> blocks from a token stream.
+
+    Tags can be split across chunk boundaries, so a small tail is held
+    back until it can't be the start of a tag. Without this, models that
+    ignore think:false leak reasoning into the display and TTS.
+    """
+
+    _OPEN = "<think>"
+    _CLOSE = "</think>"
+
+    def __init__(self) -> None:
+        self._buf = ""
+        self._in_think = False
+
+    def feed(self, chunk: str) -> str:
+        """Feed a raw chunk, get back the speakable text (may be empty)."""
+        self._buf += chunk
+        out = ""
+        while True:
+            if self._in_think:
+                idx = self._buf.find(self._CLOSE)
+                if idx == -1:
+                    # Keep only a tail that could still be a partial close tag
+                    self._buf = self._buf[-(len(self._CLOSE) - 1):]
+                    break
+                self._buf = self._buf[idx + len(self._CLOSE):]
+                self._in_think = False
+            else:
+                idx = self._buf.find(self._OPEN)
+                if idx == -1:
+                    # Emit everything except a suffix that could be a partial open tag
+                    keep = 0
+                    max_k = min(len(self._OPEN) - 1, len(self._buf))
+                    for k in range(max_k, 0, -1):
+                        if self._buf.endswith(self._OPEN[:k]):
+                            keep = k
+                            break
+                    cut = len(self._buf) - keep
+                    out += self._buf[:cut]
+                    self._buf = self._buf[cut:]
+                    break
+                out += self._buf[:idx]
+                self._buf = self._buf[idx + len(self._OPEN):]
+                self._in_think = True
+        return out
+
+    def flush(self) -> str:
+        """Return any held-back text at end of stream (dropped if mid-think)."""
+        out = "" if self._in_think else self._buf
+        self._buf = ""
+        return out
+
+
 class OllamaLLMProvider(LLMProvider):
     """
     LLM Provider using Ollama's REST API.
@@ -132,6 +187,7 @@ class OllamaLLMProvider(LLMProvider):
             },
         }
 
+        think_filter = _ThinkTagFilter()
         async with self.client.stream("POST", "/api/chat", json=payload) as resp:
             resp.raise_for_status()
             async for line in resp.aiter_lines():
@@ -140,9 +196,14 @@ class OllamaLLMProvider(LLMProvider):
                         data = json.loads(line)
                         content = data.get("message", {}).get("content", "")
                         if content:
-                            yield content
+                            clean = think_filter.feed(content)
+                            if clean:
+                                yield clean
                     except json.JSONDecodeError:
                         continue
+        tail = think_filter.flush()
+        if tail:
+            yield tail
 
     async def stream_generate_with_metadata(
         self,
@@ -175,6 +236,7 @@ class OllamaLLMProvider(LLMProvider):
         accumulated_text = ""
         eval_count = 0
         first_token_time = None
+        think_filter = _ThinkTagFilter()
 
         async with self.client.stream("POST", "/api/chat", json=payload) as resp:
             resp.raise_for_status()
@@ -186,13 +248,20 @@ class OllamaLLMProvider(LLMProvider):
                         if content:
                             if first_token_time is None:
                                 first_token_time = time.time()
-                            accumulated_text += content
-                            yield content
+                            clean = think_filter.feed(content)
+                            if clean:
+                                accumulated_text += clean
+                                yield clean
                         # Capture token count from the final chunk
                         if data.get("done", False):
                             eval_count = data.get("eval_count", 0)
                     except json.JSONDecodeError:
                         continue
+
+        tail = think_filter.flush()
+        if tail:
+            accumulated_text += tail
+            yield tail
 
         # After streaming completes, parse and yield final metadata
         generation_time = (time.time() - start_time) * 1000
@@ -242,13 +311,14 @@ class OllamaLLMProvider(LLMProvider):
         """
         Parse emotion tag from LLM response.
 
-        Searches for [emotion] tag anywhere in text — handles models
-        that output reasoning before the actual response.
+        Only matches a tag at the START of the text. Brackets later in
+        the reply ("Hola mamá [risas] qué bueno verte") are spoken
+        content — matching them would silently delete dialogue.
 
-        Input:  "Some reasoning... [warm, nostalgic] I remember when..."
+        Input:  "[warm, nostalgic] I remember when..."
         Output: ("warm, nostalgic", "I remember when...")
         """
-        match = re.search(r"\[([^\]]+)\]\s*(.+)", text, re.DOTALL)
+        match = re.match(r"\s*\[([^\]]+)\]\s*(.*)", text, re.DOTALL)
         if match:
             emotion = match.group(1).strip()
             clean_text = match.group(2).strip()

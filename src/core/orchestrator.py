@@ -12,14 +12,17 @@ the AI Actor's conversation loop. Handles:
 """
 
 import asyncio
+import json
 import logging
 import re
 import time
 import uuid
+from pathlib import Path
 from typing import Any, AsyncIterator
 
 from src.core.config import get_config
-from src.core.state import ActorState, ConversationTurn
+from src.core.logging_utils import defer_console_logs, flush_console_logs
+from src.core.state import ActorState, ConversationTurn, PerformancePhase
 from src.core.age_engine import AgeEngine
 from src.core.registry import (
     create_llm_provider,
@@ -57,6 +60,62 @@ class Orchestrator:
         # Control
         self._running = False
         self._proactive_task: asyncio.Task | None = None
+
+        # Performance-state persistence (crash recovery for the 72h run)
+        system_config = config.get("system", {})
+        self._state_file = Path(system_config.get("state_file", "data/performance_state.json"))
+        self._performance_duration_hours = system_config.get("performance_duration_hours", 72)
+
+    def _start_or_resume_performance(self) -> bool:
+        """
+        Start the performance, resuming a previous run if a saved state
+        exists and is still inside the performance window.
+
+        Without this, a crash at hour 50 would restart the character at
+        age 10 with an old woman's memories. Returns True if resumed.
+        """
+        fresh = self.config.get("system", {}).get("fresh_start", False)
+
+        if not fresh and self._state_file.exists():
+            try:
+                data = json.loads(self._state_file.read_text())
+                start = float(data["performance_start_time"])
+                elapsed_hours = (time.time() - start) / 3600
+                if 0 <= elapsed_hours < self._performance_duration_hours:
+                    self.state.performance_start_time = start
+                    self.state.performance_phase = PerformancePhase.RUNNING
+                    self.state.last_interaction_time = time.time()
+                    self.age_engine.update_state(self.state)
+                    logger.info(
+                        f"⏮️  Resumed performance at hour {elapsed_hours:.1f} "
+                        f"(age stage {self.state.current_age_stage}) from {self._state_file}"
+                    )
+                    return True
+                logger.info(
+                    f"Saved performance state is {elapsed_hours:.1f}h old "
+                    f"(window is {self._performance_duration_hours}h) — starting fresh"
+                )
+            except (OSError, ValueError, KeyError) as e:
+                logger.warning(f"Could not read {self._state_file}: {e} — starting fresh")
+
+        self.state.start_performance()
+        self._persist_performance_state()
+        return False
+
+    def _persist_performance_state(self) -> None:
+        """Write performance timing to disk (atomically) for crash recovery."""
+        if self.state.performance_start_time is None:
+            return
+        try:
+            self._state_file.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self._state_file.with_suffix(".tmp")
+            tmp.write_text(json.dumps({
+                "performance_start_time": self.state.performance_start_time,
+                "saved_at": time.time(),
+            }))
+            tmp.replace(self._state_file)
+        except OSError as e:
+            logger.warning(f"Could not persist performance state: {e}")
 
     async def setup(self) -> None:
         """Initialize all providers."""
@@ -118,10 +177,7 @@ class Orchestrator:
         age_changed = self.age_engine.update_state(self.state)
         if age_changed:
             # Store age transition as milestone memory
-            stage = self.age_engine.get_current_stage(self.state)
-            await self._store_milestone(
-                f"Aged into {stage.range} years old after {self.state.hours_elapsed:.1f} hours"
-            )
+            await self._store_age_milestone()
 
         # 1. Record user input
         self.state.add_turn("user", user_text, speaker_id=speaker_id)
@@ -181,10 +237,7 @@ class Orchestrator:
         # Update age progression
         age_changed = self.age_engine.update_state(self.state)
         if age_changed:
-            stage = self.age_engine.get_current_stage(self.state)
-            await self._store_milestone(
-                f"Aged into {stage.range} years old after {self.state.hours_elapsed:.1f} hours"
-            )
+            await self._store_age_milestone()
 
         # 1. Record user input
         self.state.add_turn("user", user_text, speaker_id=speaker_id)
@@ -322,9 +375,10 @@ class Orchestrator:
         else:
             # Include both what was said and what was responded —
             # this is what makes semantic search actually work.
+            name = self.config.get("llm", {}).get("personality", {}).get("name", "Indira")
             user_part = user_input[:150].strip()
             response_part = response.text[:200].strip()
-            summary = f"Mamá dijo: {user_part}. Indira respondió: {response_part}"
+            summary = f"Mamá dijo: {user_part}. {name} respondió: {response_part}"
 
         memory = Memory(
             id=str(uuid.uuid4()),
@@ -335,6 +389,16 @@ class Orchestrator:
             memory_type="interaction",
         )
         await self.memory.store(memory)
+
+    async def _store_age_milestone(self) -> None:
+        """Store an age transition as a milestone memory (in Spanish — it
+        gets injected into the prompt as one of the character's recuerdos)."""
+        stage = self.age_engine.get_current_stage(self.state)
+        low, _, high = stage.range.partition("-")
+        await self._store_milestone(
+            f"Crecí: ahora tengo entre {low} y {high} años. "
+            f"Llevo {self.state.hours_elapsed:.1f} horas de vida."
+        )
 
     async def _store_milestone(self, content: str) -> None:
         """Store a milestone event in memory."""
@@ -349,6 +413,205 @@ class Orchestrator:
             memory_type="milestone",
         )
         await self.memory.store(memory)
+
+    async def _stream_and_speak(self, user_input: str, console: Any) -> str:
+        """
+        Generate a response and deliver it: stream text to the console,
+        speak it through TTS. Shared by text and voice modes.
+
+        With tts.streaming enabled, sentences are synthesized and played
+        while the LLM is still generating (overlapping pipeline). Otherwise
+        the full response is synthesized after generation completes.
+
+        Returns the full response text.
+        """
+        from rich.markup import escape
+
+        stage = self.age_engine.get_current_stage(self.state)
+        name = self.config.get("llm", {}).get("personality", {}).get("name", "Entity")
+        use_streaming = self.config.get("llm", {}).get("streaming", True)
+        tts_streaming = bool(
+            self.tts
+            and hasattr(self.tts, "speak_directly")
+            and self.config.get("tts", {}).get("streaming", False)
+        )
+        logger.debug(f"🔧 TTS streaming: {tts_streaming} | LLM streaming: {use_streaming}")
+
+        self.state.is_speaking = True
+        # Hold log output back: the response line stays open across chunks,
+        # and a log record landing mid-sentence makes the console unreadable
+        defer_console_logs()
+        try:
+            if not use_streaming:
+                # Non-streaming fallback
+                full_response = await self.process_input(user_input)
+                emotion = escape(self.state.current_emotion or "neutral")
+                console.print(
+                    f"\n🎭 [bold cyan]{name}[/bold cyan] "
+                    f"[dim](age {stage.range}, {emotion})[/dim]: ",
+                    end="",
+                )
+                # markup off: brackets in the line ("[risas]") are dialogue,
+                # not Rich tags — Rich would silently swallow them
+                console.print(full_response, markup=False, highlight=False)
+                await self._speak_full(full_response, console)
+                return full_response
+
+            # Stream response word-by-word
+            header_printed = False
+            response = None
+
+            # Real-time TTS pipeline state
+            tts_sentence_buf = ""     # Accumulates clean text for TTS
+            tts_queue = asyncio.Queue()  # Sentences ready for TTS
+            tts_task = None           # Background task playing audio
+            stream_buffer = ""        # Buffer to strip [emotion] tag
+            tag_stripped = False
+            tts_sentence_count = 0    # Sentences accumulated in buffer
+            tts_chunk_size = self.config.get("tts", {}).get("chunk_sentences", 1)
+            tts_metrics = []          # Accumulate TTS logs to print at end
+            current_streaming_emotion = self.state.current_emotion  # Fallback
+
+            async for chunk in self.process_input_streaming(user_input):
+                if isinstance(chunk, LLMResponse):
+                    response = chunk
+                    continue
+
+                # Print header before first chunk
+                if not header_printed:
+                    emotion = escape(self.state.current_emotion or "neutral")
+                    console.print(
+                        f"\n🎭 [bold cyan]{name}[/bold cyan] "
+                        f"[dim](age {stage.range}, {emotion})[/dim]: ",
+                        end="",
+                    )
+                    header_printed = True
+
+                # Buffer initial chunks to strip [emotion] tag
+                if not tag_stripped:
+                    stream_buffer += chunk
+                    bracket_end = stream_buffer.find("]")
+                    if bracket_end >= 0 and stream_buffer.lstrip().startswith("["):
+                        bracket_start = stream_buffer.find("[")
+                        current_streaming_emotion = stream_buffer[bracket_start + 1:bracket_end].strip()
+                        clean = stream_buffer[bracket_end + 1:].lstrip()
+                        if clean:
+                            console.print(clean, end="", markup=False, highlight=False)
+                            tts_sentence_buf += clean
+                        tag_stripped = True
+                    elif len(stream_buffer) > 50 or (not stream_buffer.lstrip().startswith("[") and len(stream_buffer) > 5):
+                        console.print(stream_buffer, end="", markup=False, highlight=False)
+                        tts_sentence_buf += stream_buffer
+                        tag_stripped = True
+                else:
+                    # Print each chunk as it arrives.
+                    # markup off: brackets in the line ("[risas]") are dialogue,
+                    # not Rich tags — Rich would silently swallow them
+                    console.print(chunk, end="", markup=False, highlight=False)
+                    tts_sentence_buf += chunk
+
+                # Check for sentence boundary → count and queue for TTS
+                if tts_streaming and tag_stripped and tts_sentence_buf.rstrip().endswith((".", "!", "?")):
+                    tts_sentence_count += 1
+                    if tts_sentence_count >= tts_chunk_size:
+                        sentence = tts_sentence_buf.strip()
+                        tts_sentence_buf = ""
+                        tts_sentence_count = 0
+                        if sentence:
+                            await tts_queue.put(sentence)
+                            # Start TTS consumer if not running
+                            if tts_task is None or tts_task.done():
+                                voice_profile = self._get_voice_profile()
+                                emotion_for_tts = current_streaming_emotion
+                                tts_task = asyncio.create_task(
+                                    self._tts_consumer(
+                                        tts_queue, voice_profile, emotion_for_tts, tts_metrics
+                                    )
+                                )
+
+            # Flush remaining text to TTS
+            if tts_streaming and tts_sentence_buf.strip():
+                await tts_queue.put(tts_sentence_buf.strip())
+                if tts_task is None or tts_task.done():
+                    voice_profile = self._get_voice_profile()
+                    tts_task = asyncio.create_task(
+                        self._tts_consumer(
+                            tts_queue, voice_profile, current_streaming_emotion, tts_metrics
+                        )
+                    )
+
+            # Newline after streaming completes
+            console.print()
+
+            # Print stats below the response
+            if response:
+                ttft = response.first_token_time_ms
+                total = response.generation_time_ms
+                tokens = response.tokens_generated
+                tps = (tokens / (total / 1000)) if total > 0 else 0
+                console.print(
+                    f"[dim]   ⚡ first token: {ttft:.0f}ms | "
+                    f"total: {total:.0f}ms | "
+                    f"{tokens} tokens ({tps:.1f} tok/s) | "
+                    f"emotion: {response.emotion or 'none'}[/dim]"
+                )
+
+            full_response = response.text if response else ""
+
+            # Wait for TTS to finish all queued sentences
+            if tts_streaming and tts_task and not tts_task.done():
+                await tts_queue.put(None)  # Sentinel to stop consumer
+                await tts_task
+
+            # Print TTS metrics at the end
+            if tts_streaming and tts_metrics:
+                for m in tts_metrics:
+                    console.print(f"[dim]   🔉 {m}[/dim]")
+
+            # Non-streaming TTS: speak the full response at once
+            if not tts_streaming:
+                await self._speak_full(full_response, console)
+
+            return full_response
+        finally:
+            self.state.is_speaking = False
+            flush_console_logs()
+
+    async def _speak_full(self, text_to_speak: str, console: Any) -> None:
+        """Synthesize a whole response at once and play it through afplay."""
+        import tempfile
+
+        if not (self.tts and text_to_speak):
+            return
+
+        voice_profile = self._get_voice_profile()
+        emotion_for_tts = self.state.current_emotion
+        try:
+            tts_result = await self.tts.synthesize(
+                text_to_speak, voice_profile, emotion=emotion_for_tts
+            )
+            console.print(
+                f"[dim]   🔉 TTS [{len(text_to_speak)} chars]: "
+                f"{tts_result.duration_seconds:.1f}s audio "
+                f"generated in {tts_result.generation_time_ms:.0f}ms "
+                f"(emotion: {emotion_for_tts or 'none'})[/dim]"
+            )
+            # Play the already-synthesized audio
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+                f.write(tts_result.audio_data)
+                temp_path = f.name
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    "afplay", temp_path,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await process.wait()
+            finally:
+                Path(temp_path).unlink(missing_ok=True)
+        except Exception as e:
+            logger.error(f"TTS error: {e}")
+            console.print(f"[dim]   🔇 TTS error: {e}[/dim]")
 
     async def run_text_mode(self) -> None:
         """
@@ -368,7 +631,12 @@ class Orchestrator:
             border_style="magenta",
         ))
 
-        self.state.start_performance()
+        if self._start_or_resume_performance():
+            console.print(
+                f"[yellow]⏮️  Resumed at hour {self.state.hours_elapsed:.1f} "
+                f"(age {self.state.current_age_stage}). "
+                f"Use --fresh to start over.[/yellow]"
+            )
 
         while True:
             try:
@@ -389,169 +657,7 @@ class Orchestrator:
 
             # Process input
             try:
-                self.state.is_speaking = True
-                stage = self.age_engine.get_current_stage(self.state)
-                use_streaming = self.config.get("llm", {}).get("streaming", True)
-                personality = self.config.get("llm", {}).get("personality", {})
-                name = personality.get("name", "Entity")
-                tts_streaming = (
-                    self.tts
-                    and hasattr(self.tts, "speak_directly")
-                    and self.config.get("tts", {}).get("streaming", False)
-                )
-                logger.info(f"🔧 TTS streaming: {tts_streaming} | LLM streaming: {use_streaming}")
-
-                if use_streaming:
-                    # Stream response word-by-word
-                    header_printed = False
-                    response = None
-
-                    # Real-time TTS pipeline state
-                    tts_sentence_buf = ""     # Accumulates clean text for TTS
-                    tts_queue = asyncio.Queue()  # Sentences ready for TTS
-                    tts_task = None           # Background task playing audio
-                    stream_buffer = ""        # Buffer to strip [emotion] tag
-                    tag_stripped = False
-                    tts_sentence_count = 0    # Sentences accumulated in buffer
-                    tts_chunk_size = self.config.get("tts", {}).get("chunk_sentences", 1)
-                    tts_metrics = []          # Accumulate TTS logs to print at end
-                    current_streaming_emotion = self.state.current_emotion  # Fallback
-
-                    async for chunk in self.process_input_streaming(user_input):
-                        if isinstance(chunk, LLMResponse):
-                            response = chunk
-                            continue
-
-                        # Print header before first chunk
-                        if not header_printed:
-                            from rich.markup import escape
-                            emotion = escape(self.state.current_emotion or "neutral")
-                            console.print(
-                                f"\n🎭 [bold cyan]{name}[/bold cyan] "
-                                f"[dim](age {stage.range}, {emotion})[/dim]: ",
-                                end="",
-                            )
-                            header_printed = True
-
-                        # Buffer initial chunks to strip [emotion] tag
-                        if not tag_stripped:
-                            stream_buffer += chunk
-                            bracket_end = stream_buffer.find("]")
-                            if bracket_end >= 0 and stream_buffer.lstrip().startswith("["):
-                                bracket_start = stream_buffer.find("[")
-                                current_streaming_emotion = stream_buffer[bracket_start + 1:bracket_end].strip()
-                                clean = stream_buffer[bracket_end + 1:].lstrip()
-                                if clean:
-                                    console.print(clean, end="", highlight=False)
-                                    tts_sentence_buf += clean
-                                tag_stripped = True
-                            elif len(stream_buffer) > 50 or (not stream_buffer.lstrip().startswith("[") and len(stream_buffer) > 5):
-                                console.print(stream_buffer, end="", highlight=False)
-                                tts_sentence_buf += stream_buffer
-                                tag_stripped = True
-                        else:
-                            # Print each chunk as it arrives
-                            console.print(chunk, end="", highlight=False)
-                            tts_sentence_buf += chunk
-
-                        # Check for sentence boundary → count and queue for TTS
-                        if tts_streaming and tag_stripped and tts_sentence_buf.rstrip().endswith((".", "!", "?")):
-                            tts_sentence_count += 1
-                            if tts_sentence_count >= tts_chunk_size:
-                                sentence = tts_sentence_buf.strip()
-                                tts_sentence_buf = ""
-                                tts_sentence_count = 0
-                                if sentence:
-                                    await tts_queue.put(sentence)
-                                    # Start TTS consumer if not running
-                                    if tts_task is None or tts_task.done():
-                                        voice_profile = self._get_voice_profile()
-                                        emotion_for_tts = current_streaming_emotion
-                                        tts_task = asyncio.create_task(
-                                            self._tts_consumer(
-                                                tts_queue, voice_profile, emotion_for_tts, tts_metrics
-                                            )
-                                        )
-
-                    # Flush remaining text to TTS
-                    if tts_streaming and tts_sentence_buf.strip():
-                        await tts_queue.put(tts_sentence_buf.strip())
-                        if tts_task is None or tts_task.done():
-                            voice_profile = self._get_voice_profile()
-                            tts_task = asyncio.create_task(
-                                self._tts_consumer(
-                                    tts_queue, voice_profile, current_streaming_emotion, tts_metrics
-                                )
-                            )
-
-                    # Newline after streaming completes
-                    console.print()
-
-                    # Print stats below the response
-                    if response:
-                        ttft = response.first_token_time_ms
-                        total = response.generation_time_ms
-                        tokens = response.tokens_generated
-                        tps = (tokens / (total / 1000)) if total > 0 else 0
-                        console.print(
-                            f"[dim]   ⚡ first token: {ttft:.0f}ms | "
-                            f"total: {total:.0f}ms | "
-                            f"{tokens} tokens ({tps:.1f} tok/s) | "
-                            f"emotion: {response.emotion or 'none'}[/dim]"
-                        )
-
-                    full_response = response.text if response else ""
-
-                    # Wait for TTS to finish all queued sentences
-                    if tts_streaming and tts_task and not tts_task.done():
-                        await tts_queue.put(None)  # Sentinel to stop consumer
-                        await tts_task
-
-                    # Print TTS metrics at the end
-                    if tts_streaming and tts_metrics:
-                        for m in tts_metrics:
-                            console.print(f"[dim]   🔉 {m}[/dim]")
-                else:
-                    # Non-streaming fallback
-                    full_response = await self.process_input(user_input)
-                    from rich.markup import escape
-                    emotion = escape(self.state.current_emotion or "neutral")
-                    console.print(
-                        f"\n🎭 [bold cyan]{name}[/bold cyan] "
-                        f"[dim](age {stage.range}, {emotion})[/dim]: {full_response}"
-                    )
-
-                self.state.is_speaking = False
-
-                # Speak with TTS (non-streaming path: full response at once)
-                if not tts_streaming and self.tts and full_response:
-                    import tempfile
-                    from pathlib import Path
-                    voice_profile = self._get_voice_profile()
-                    emotion_for_tts = self.state.current_emotion
-                    tts_result = await self.tts.synthesize(
-                        full_response, voice_profile, emotion=emotion_for_tts
-                    )
-                    console.print(
-                        f"[dim]   🔉 TTS [{len(full_response)} chars]: "
-                        f"{tts_result.duration_seconds:.1f}s audio "
-                        f"generated in {tts_result.generation_time_ms:.0f}ms "
-                        f"(emotion: {emotion_for_tts or 'none'})[/dim]"
-                    )
-                    # Play the already-synthesized audio
-                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-                        f.write(tts_result.audio_data)
-                        temp_path = f.name
-                    try:
-                        process = await asyncio.create_subprocess_exec(
-                            "afplay", temp_path,
-                            stdout=asyncio.subprocess.PIPE,
-                            stderr=asyncio.subprocess.PIPE,
-                        )
-                        await process.wait()
-                    finally:
-                        Path(temp_path).unlink(missing_ok=True)
-
+                await self._stream_and_speak(user_input, console)
             except Exception as e:
                 console.print(f"\n[red]Error: {e}[/red]")
                 logger.exception("Error processing input")
@@ -565,8 +671,7 @@ class Orchestrator:
         """
         import sounddevice as sd
         import numpy as np
-        import tempfile
-        from pathlib import Path
+        from collections import deque
         from rich.console import Console
         from rich.panel import Panel
 
@@ -589,9 +694,7 @@ class Orchestrator:
         energy_threshold = vad_config.get("energy_threshold", 0.02)
         silence_ms = vad_config.get("silence_duration_ms", 800)
         silence_frames = int(silence_ms / 1000 * sample_rate)
-
-        personality = self.config.get("llm", {}).get("personality", {})
-        name = personality.get("name", "Entity")
+        preroll_ms = vad_config.get("preroll_ms", 300)
 
         console.print(Panel.fit(
             "[bold magenta]🎭 AI Actor — Voice Mode[/bold magenta]\n"
@@ -600,7 +703,12 @@ class Orchestrator:
             border_style="magenta",
         ))
 
-        self.state.start_performance()
+        if self._start_or_resume_performance():
+            console.print(
+                f"[yellow]⏮️  Resumed at hour {self.state.hours_elapsed:.1f} "
+                f"(age {self.state.current_age_stage}). "
+                f"Use --fresh to start over.[/yellow]"
+            )
 
         # Audio buffer shared between callback and main loop
         audio_queue: asyncio.Queue[np.ndarray | None] = asyncio.Queue()
@@ -616,6 +724,7 @@ class Orchestrator:
         # Open mic stream
         block_duration_ms = 100  # Process audio in 100ms blocks
         block_size = int(sample_rate * block_duration_ms / 1000)
+        preroll_maxlen = max(1, round(preroll_ms / block_duration_ms))
 
         try:
             stream = sd.InputStream(
@@ -638,6 +747,10 @@ class Orchestrator:
             while True:
                 # ── Phase 1: Wait for speech ──
                 speech_buffer: list[np.ndarray] = []
+                # Rolling ~300ms of pre-speech audio: speech onsets fade in
+                # below the energy threshold, so without this the first
+                # syllable gets clipped and Whisper mis-hears the line start.
+                preroll: deque[np.ndarray] = deque(maxlen=preroll_maxlen)
                 is_speaking = False
                 silence_counter = 0
 
@@ -656,9 +769,14 @@ class Orchestrator:
                         if not is_speaking:
                             is_speaking = True
                             silence_counter = 0
+                            preroll_samples = sum(c.size for c in preroll)
+                            speech_buffer.extend(preroll)
+                            preroll.clear()
                             console.print("\r[yellow]🎤 Hearing you...[/yellow]   ", end="")
                         speech_buffer.append(chunk)
                         silence_counter = 0
+                    elif not is_speaking:
+                        preroll.append(chunk)
                     elif is_speaking:
                         # Still recording but silence detected
                         speech_buffer.append(chunk)
@@ -672,16 +790,20 @@ class Orchestrator:
                     continue
 
                 # ── Anti-hallucination checks ──
+                # Checks run on the speech portion only — the quiet pre-roll
+                # would otherwise pad blips past the duration check and drag
+                # the average energy down.
                 audio_data = np.concatenate(speech_buffer).flatten()
-                duration_s = len(audio_data) / sample_rate
+                speech_only = audio_data[preroll_samples:]
+                duration_s = len(speech_only) / sample_rate
 
                 # 1. Minimum speech duration — ignore noise blips
                 if duration_s < 0.5:
                     console.print("\r[green]🎤 Listening...[/green]", end="")
                     continue
 
-                # 2. Average energy of the full buffer — reject near-silent audio
-                avg_energy = np.sqrt(np.mean(audio_data ** 2))
+                # 2. Average energy of the speech portion — reject near-silent audio
+                avg_energy = np.sqrt(np.mean(speech_only ** 2))
                 if avg_energy < energy_threshold * 0.7:
                     logger.debug(f"Audio too quiet (energy={avg_energy:.4f}), skipping")
                     console.print("\r[green]🎤 Listening...[/green]", end="")
@@ -720,71 +842,25 @@ class Orchestrator:
                     continue
 
                 # Show what was heard
-                stage = self.age_engine.get_current_stage(self.state)
                 console.print(f"\r🎤 You ({transcription.language}): {text}")
 
-                # ── Phase 3: Process through LLM ──
+                # ── Phase 3: Generate and speak (mic paused) ──
+                # The mic pauses for the WHOLE generate+speak phase: with
+                # streaming TTS, playback starts while the LLM is still
+                # generating, and the mic must not hear the speakers.
+                stream.stop()
                 try:
-                    full_response = await self.process_input(text)
+                    await self._stream_and_speak(text, console)
                 except Exception as e:
-                    logger.error(f"LLM error: {e}")
-                    console.print(f"\r[red]LLM error: {e}[/red]")
-                    console.print("\n[green]🎤 Listening...[/green]", end="")
-                    continue
-
-                # Show response
-                stage = self.age_engine.get_current_stage(self.state)
-                from rich.markup import escape
-                emotion = escape(self.state.current_emotion or "neutral")
-                console.print(
-                    f"\r🎭 [bold cyan]{name}[/bold cyan] "
-                    f"[dim](age {stage.range}, {emotion})[/dim]: {full_response}"
-                )
-
-                # ── Phase 4: Speak response (mic paused) ──
-                if self.tts and full_response:
-                    # Pause mic so TTS output doesn't get picked up as input
-                    stream.stop()
-
-                    voice_profile = self._get_voice_profile()
-                    emotion_for_tts = self.state.current_emotion
-                    try:
-                        tts_result = await self.tts.synthesize(
-                            full_response, voice_profile, emotion=emotion_for_tts
-                        )
-                        console.print(
-                            f"[dim]   🔉 TTS [{len(full_response)} chars]: "
-                            f"{tts_result.duration_seconds:.1f}s audio "
-                            f"in {tts_result.generation_time_ms:.0f}ms "
-                            f"(emotion: {emotion_for_tts or 'none'})[/dim]"
-                        )
-
-                        # Play audio
-                        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-                            f.write(tts_result.audio_data)
-                            temp_path = f.name
-                        try:
-                            process = await asyncio.create_subprocess_exec(
-                                "afplay", temp_path,
-                                stdout=asyncio.subprocess.PIPE,
-                                stderr=asyncio.subprocess.PIPE,
-                            )
-                            await process.wait()
-                        finally:
-                            Path(temp_path).unlink(missing_ok=True)
-
-                    except Exception as e:
-                        logger.error(f"TTS error: {e}")
-                        console.print(f"[dim]   🔇 TTS error: {e}[/dim]")
-
-                    # Drain any queued audio captured before mic was paused
+                    logger.error(f"Response error: {e}")
+                    console.print(f"\r[red]Error: {e}[/red]")
+                finally:
+                    # Drain audio captured before the mic was paused, then resume
                     while not audio_queue.empty():
                         try:
                             audio_queue.get_nowait()
                         except asyncio.QueueEmpty:
                             break
-
-                    # Resume mic
                     stream.start()
 
                 console.print("\n[green]🎤 Listening...[/green]", end="")
@@ -912,9 +988,9 @@ class Orchestrator:
                         target_hour = self.age_engine.stages[-1].start_hour
                 
                 if self.state.performance_start_time:
-                    import time
                     self.state.performance_start_time = time.time() - (target_hour * 3600.0)
                     self.age_engine.update_state(self.state)
+                    self._persist_performance_state()
                     stage = self.age_engine.get_current_stage(self.state)
                     console.print(f"⏩ Set age to {target_age}. Mapped to stage: {stage.range}")
             except ValueError:

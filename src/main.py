@@ -17,17 +17,21 @@ from rich.logging import RichHandler
 from rich.panel import Panel
 
 from src.core.config import load_config
+from src.core.logging_utils import DeferrableHandler, set_console_handler
 from src.core.orchestrator import Orchestrator
 from src.core.registry import list_providers
 
 
 def setup_logging(level: str = "INFO") -> None:
-    """Configure rich logging."""
+    """Configure rich logging (deferrable, so logs don't cut into
+    a response while it is streaming to the console)."""
+    handler = DeferrableHandler(RichHandler(rich_tracebacks=True, markup=True))
+    set_console_handler(handler)
     logging.basicConfig(
         level=level,
         format="%(message)s",
         datefmt="[%X]",
-        handlers=[RichHandler(rich_tracebacks=True, markup=True)],
+        handlers=[handler],
     )
 
 
@@ -71,6 +75,11 @@ Environment Variables:
         help="Log level override",
     )
     parser.add_argument(
+        "--fresh",
+        action="store_true",
+        help="Start the performance from hour 0 (ignore saved performance state)",
+    )
+    parser.add_argument(
         "--list-providers",
         action="store_true",
         help="List available providers and exit",
@@ -85,6 +94,8 @@ async def run(args: argparse.Namespace) -> None:
 
     # Load configuration
     config = load_config(config_dir=args.config, environment=args.env)
+    if args.fresh:
+        config.setdefault("system", {})["fresh_start"] = True
 
     # Setup logging
     log_level = args.log_level or config.get("system", {}).get("log_level", "INFO")

@@ -18,11 +18,17 @@ Switch from SimpleMemoryProvider by setting config:
 import logging
 import time
 import uuid
+from collections import deque
 from pathlib import Path
 
 from src.core.interfaces.memory import Memory, MemoryProvider
 
 logger = logging.getLogger(__name__)
+
+# How many of the newest memories to keep in the recency buffer.
+# Chroma's get(limit=N) returns an arbitrary slice (no ORDER BY), so
+# recency is tracked here instead of queried from the collection.
+_RECENT_BUFFER_SIZE = 100
 
 
 class ChromaMemoryProvider(MemoryProvider):
@@ -43,6 +49,8 @@ class ChromaMemoryProvider(MemoryProvider):
         self.client = None
         self.collection = None
         self._persist_dir: str | None = None
+        # Newest-first buffer of recent memories (see _RECENT_BUFFER_SIZE)
+        self._recent: deque[Memory] = deque(maxlen=_RECENT_BUFFER_SIZE)
 
     async def initialize(self, config: dict) -> None:
         """Initialize ChromaDB client and collection."""
@@ -76,10 +84,46 @@ class ChromaMemoryProvider(MemoryProvider):
         )
 
         existing_count = self.collection.count()
+        self._seed_recent_buffer()
         logger.info(
             f"ChromaDB initialized. Collection: {collection_name}, "
             f"Existing memories: {existing_count}, "
             f"Persist: {self._persist_dir}"
+        )
+
+    def _seed_recent_buffer(self) -> None:
+        """Load the newest memories from the collection into the recency buffer."""
+        self._recent.clear()
+        if not self.collection or self.collection.count() == 0:
+            return
+        try:
+            all_results = self.collection.get()  # full scan, once at startup
+        except Exception as e:
+            logger.warning(f"Could not seed recent-memory buffer: {e}")
+            return
+        memories = [
+            self._to_memory(
+                all_results["ids"][i],
+                all_results["metadatas"][i] if all_results["metadatas"] else {},
+                all_results["documents"][i] if all_results["documents"] else "",
+            )
+            for i in range(len(all_results["ids"]))
+        ]
+        memories.sort(key=lambda m: m.timestamp)  # oldest → newest
+        for mem in memories[-_RECENT_BUFFER_SIZE:]:
+            self._recent.appendleft(mem)
+
+    @staticmethod
+    def _to_memory(mem_id: str, meta: dict, content: str) -> Memory:
+        """Build a Memory from ChromaDB id/metadata/document."""
+        return Memory(
+            id=mem_id,
+            content=content,
+            age_stage=meta.get("age_stage", "unknown"),
+            emotional_tag=meta.get("emotional_tag"),
+            importance=meta.get("importance", 0.5),
+            timestamp=meta.get("timestamp", 0.0),
+            memory_type=meta.get("memory_type", "interaction"),
         )
 
     async def store(self, memory: Memory) -> None:
@@ -111,6 +155,7 @@ class ChromaMemoryProvider(MemoryProvider):
             documents=[memory.content],
             metadatas=[metadata],
         )
+        self._recent.appendleft(memory)
 
         logger.debug(
             f"Stored memory [{memory.memory_type}] "
@@ -161,58 +206,22 @@ class ChromaMemoryProvider(MemoryProvider):
             for i, mem_id in enumerate(results["ids"][0]):
                 meta = results["metadatas"][0][i] if results["metadatas"] else {}
                 content = results["documents"][0][i] if results["documents"] else ""
-
-                memories.append(Memory(
-                    id=mem_id,
-                    content=content,
-                    age_stage=meta.get("age_stage", "unknown"),
-                    emotional_tag=meta.get("emotional_tag"),
-                    importance=meta.get("importance", 0.5),
-                    timestamp=meta.get("timestamp", 0.0),
-                    memory_type=meta.get("memory_type", "interaction"),
-                ))
+                memories.append(self._to_memory(mem_id, meta, content))
 
         return memories
 
     async def get_recent(self, limit: int = 10) -> list[Memory]:
-        """Get most recent memories by timestamp."""
+        """
+        Get most recent memories, newest first.
+
+        Served from the in-process recency buffer: ChromaDB's get(limit=N)
+        returns an arbitrary slice, so querying it for "recent" silently
+        returns the oldest memories once the collection grows.
+        """
         if not self.collection:
             raise RuntimeError("ChromaDB not initialized")
 
-        if self.collection.count() == 0:
-            return []
-
-        # Get all and sort by timestamp (ChromaDB doesn't support ORDER BY)
-        try:
-            all_results = self.collection.get(
-                limit=min(limit * 3, self.collection.count()),
-            )
-        except Exception as e:
-            logger.warning(f"ChromaDB get_recent failed: {e}")
-            return []
-
-        if not all_results or not all_results["ids"]:
-            return []
-
-        # Build memories and sort by timestamp
-        memories = []
-        for i, mem_id in enumerate(all_results["ids"]):
-            meta = all_results["metadatas"][i] if all_results["metadatas"] else {}
-            content = all_results["documents"][i] if all_results["documents"] else ""
-
-            memories.append(Memory(
-                id=mem_id,
-                content=content,
-                age_stage=meta.get("age_stage", "unknown"),
-                emotional_tag=meta.get("emotional_tag"),
-                importance=meta.get("importance", 0.5),
-                timestamp=meta.get("timestamp", 0.0),
-                memory_type=meta.get("memory_type", "interaction"),
-            ))
-
-        # Sort by timestamp descending and return top N
-        memories.sort(key=lambda m: m.timestamp, reverse=True)
-        return memories[:limit]
+        return list(self._recent)[:limit]
 
     async def count(self) -> int:
         if not self.collection:
@@ -231,6 +240,7 @@ class ChromaMemoryProvider(MemoryProvider):
                 name=name,
                 metadata={"hnsw:space": "cosine"},
             )
+            self._recent.clear()
             logger.info(f"ChromaDB memory cleared. Collection {name} reset.")
         except Exception as e:
             logger.error(f"Failed to clear ChromaDB memory: {e}")

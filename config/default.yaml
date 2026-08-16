@@ -45,6 +45,7 @@ stt:
   vad:
     energy_threshold: 0.03
     silence_duration_ms: 800
+    preroll_ms: 300         # audio kept from before speech onset (avoids clipping soft first syllables)
 
 # ─── Language Model (Brain) ───
 llm:
@@ -94,7 +95,7 @@ tts:
   #   Male:   ryan, aiden, eric, dylan, uncle_fu
   default_voice:
     speed: 1.0
-  streaming: false        # TTS during LLM generation (true = speak sentence-by-sentence, false = speak full response at once)
+  streaming: true         # TTS during LLM generation (true = speak sentence-by-sentence, false = speak full response at once). Applies to text AND voice mode.
   chunk_sentences: 2      # Number of sentences per TTS chunk (1 = lowest latency, 2-3 = smoother audio)
 
 # ─── Memory ───

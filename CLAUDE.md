@@ -31,6 +31,9 @@ ollama pull gemma4:12b        # the currently configured default LLM
 # Run
 python -m src.main                 # text mode (default, no mic needed)
 python -m src.main --mode audio    # voice mode (mic → STT → LLM → TTS)
+python -m src.main --fresh         # ignore saved performance state, start at hour 0
+# (performance timing persists to data/performance_state.json and auto-resumes
+#  after a crash/restart if still inside the 72h window)
 python -m src.main --list-providers
 python -m src.main --config config --env development   # loads config/development.yaml overrides
 
@@ -41,7 +44,7 @@ python scripts/chroma_explorer.py         # Gradio web UI at :7860
 python scripts/chroma_explorer.py --cli   # Rich table in terminal
 ```
 
-**Tests:** `pyproject.toml` configures pytest (`testpaths = ["tests"]`, `asyncio_mode = "auto"`), but **there is no `tests/` directory yet** — `pytest` currently collects nothing. If you add tests, create `tests/` and write `async def test_*` (asyncio auto-mode = no `@pytest.mark.asyncio` needed). No linter/formatter is configured.
+**Tests:** run with `pytest` (venv). `tests/` covers the text-processing and persistence seams: emotion-tag parsing, incremental `<think>` stripping, memory recency, performance-state resume. Write `async def test_*` — asyncio auto-mode means no `@pytest.mark.asyncio` needed. No linter/formatter is configured.
 
 **Runtime notes:** audio playback uses macOS `afplay` and STT uses `mlx-whisper` — this is a **macOS / Apple-Silicon-only** runtime. `main()` ends with `os._exit(0)` to force-kill the blocking `input()` executor thread; a normal return won't shut the process down cleanly (this also causes a benign leaked-semaphore warning at exit — see TODO.md).
 

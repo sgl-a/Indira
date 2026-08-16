@@ -12,6 +12,8 @@ Requirements:
     pip install mlx-whisper
 """
 
+import asyncio
+import functools
 import logging
 import time
 from typing import AsyncIterator
@@ -103,7 +105,11 @@ class WhisperSTTProvider(STTProvider):
         if self._language:
             options["language"] = self._language
 
-        result = self._mlx_whisper.transcribe(audio_np, **options)
+        # Run in executor — transcription takes ~0.5-2s and would freeze
+        # the event loop (and any background tasks) if called directly
+        result = await asyncio.get_event_loop().run_in_executor(
+            None, functools.partial(self._mlx_whisper.transcribe, audio_np, **options)
+        )
 
         elapsed = (time.time() - start_time) * 1000
         text = result.get("text", "").strip()
