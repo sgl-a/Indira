@@ -20,8 +20,8 @@ import uuid
 from pathlib import Path
 from typing import Any, AsyncIterator
 
-from src.core.config import get_config
 from src.core.logging_utils import defer_console_logs, flush_console_logs
+from src.core.text_filters import sanitize_for_tts
 from src.core.state import ActorState, ConversationTurn, PerformancePhase
 from src.core.age_engine import AgeEngine
 from src.core.registry import (
@@ -65,6 +65,12 @@ class Orchestrator:
         system_config = config.get("system", {})
         self._state_file = Path(system_config.get("state_file", "data/performance_state.json"))
         self._performance_duration_hours = system_config.get("performance_duration_hours", 72)
+        # Transcript persistence: conversation_history lives in RAM, so
+        # without this a mid-show crash would resume the right age and
+        # long-term memories but an empty short-term window
+        self._transcript_file = Path(
+            system_config.get("transcript_file", "data/conversation_transcript.jsonl")
+        )
 
     def _start_or_resume_performance(self) -> bool:
         """
@@ -86,9 +92,11 @@ class Orchestrator:
                     self.state.performance_phase = PerformancePhase.RUNNING
                     self.state.last_interaction_time = time.time()
                     self.age_engine.update_state(self.state)
+                    restored_turns = self._load_transcript()
                     logger.info(
                         f"⏮️  Resumed performance at hour {elapsed_hours:.1f} "
-                        f"(age stage {self.state.current_age_stage}) from {self._state_file}"
+                        f"(age stage {self.state.current_age_stage}, "
+                        f"{restored_turns} transcript turns) from {self._state_file}"
                     )
                     return True
                 logger.info(
@@ -100,7 +108,56 @@ class Orchestrator:
 
         self.state.start_performance()
         self._persist_performance_state()
+        # New performance, new transcript
+        try:
+            self._transcript_file.unlink(missing_ok=True)
+        except OSError as e:
+            logger.warning(f"Could not clear old transcript: {e}")
         return False
+
+    def _append_transcript(self, turn: ConversationTurn) -> None:
+        """Append one turn to the on-disk transcript (JSONL, crash-safe:
+        a torn last line is skipped on load)."""
+        try:
+            self._transcript_file.parent.mkdir(parents=True, exist_ok=True)
+            with self._transcript_file.open("a", encoding="utf-8") as f:
+                f.write(json.dumps({
+                    "role": turn.role,
+                    "content": turn.content,
+                    "emotion": turn.emotion,
+                    "timestamp": turn.timestamp,
+                    "speaker_id": turn.speaker_id,
+                }, ensure_ascii=False) + "\n")
+        except OSError as e:
+            logger.warning(f"Could not append to transcript: {e}")
+
+    def _load_transcript(self) -> int:
+        """Restore conversation history from the on-disk transcript.
+        Returns the number of turns restored."""
+        if not self._transcript_file.exists():
+            return 0
+        turns: list[ConversationTurn] = []
+        try:
+            lines = self._transcript_file.read_text(encoding="utf-8").splitlines()
+        except OSError as e:
+            logger.warning(f"Could not read transcript {self._transcript_file}: {e}")
+            return 0
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                data = json.loads(line)
+                turns.append(ConversationTurn(
+                    role=data["role"],
+                    content=data["content"],
+                    emotion=data.get("emotion"),
+                    timestamp=data.get("timestamp", 0.0),
+                    speaker_id=data.get("speaker_id"),
+                ))
+            except (json.JSONDecodeError, KeyError, TypeError):
+                continue  # torn line from a crash mid-write
+        self.state.conversation_history = turns
+        return len(turns)
 
     def _persist_performance_state(self) -> None:
         """Write performance timing to disk (atomically) for crash recovery."""
@@ -180,19 +237,19 @@ class Orchestrator:
             await self._store_age_milestone()
 
         # 1. Record user input
-        self.state.add_turn("user", user_text, speaker_id=speaker_id)
+        self._append_transcript(self.state.add_turn("user", user_text, speaker_id=speaker_id))
 
         # 2. Retrieve relevant memories
         memories_context = await self._build_memory_context(user_text)
 
-        # 3. Build system prompt
+        # 3. Build system prompt (stable per age stage — Ollama KV-cache friendly)
         system_prompt = self.age_engine.build_personality_prompt(self.state, self.config)
 
-        if memories_context:
-            system_prompt += f"\n\n## Tus recuerdos\n{memories_context}"
-
-        # 4. Get conversation history
+        # 4. Get conversation history; volatile context (memories)
+        # rides on the newest message only — the stored turn keeps the clean
+        # text so history replay stays byte-stable for the prompt cache
         messages = self.state.get_recent_messages(limit=20)
+        messages[-1]["content"] = self._wrap_with_context(user_text, memories_context)
 
         # 5. Generate response
         llm_config = self.config.get("llm", {})
@@ -204,7 +261,9 @@ class Orchestrator:
         )
 
         # 6. Update state with response
-        self.state.add_turn("assistant", response.text, emotion=response.emotion)
+        self._append_transcript(
+            self.state.add_turn("assistant", response.text, emotion=response.emotion)
+        )
         if response.emotion:
             self.state.current_emotion = response.emotion
 
@@ -240,18 +299,19 @@ class Orchestrator:
             await self._store_age_milestone()
 
         # 1. Record user input
-        self.state.add_turn("user", user_text, speaker_id=speaker_id)
+        self._append_transcript(self.state.add_turn("user", user_text, speaker_id=speaker_id))
 
         # 2. Retrieve relevant memories
         memories_context = await self._build_memory_context(user_text)
 
-        # 3. Build system prompt
+        # 3. Build system prompt (stable per age stage — Ollama KV-cache friendly)
         system_prompt = self.age_engine.build_personality_prompt(self.state, self.config)
-        if memories_context:
-            system_prompt += f"\n\n## Tus recuerdos\n{memories_context}"
 
-        # 4. Get conversation history
+        # 4. Get conversation history; volatile context (memories)
+        # rides on the newest message only — the stored turn keeps the clean
+        # text so history replay stays byte-stable for the prompt cache
         messages = self.state.get_recent_messages(limit=20)
+        messages[-1]["content"] = self._wrap_with_context(user_text, memories_context)
 
         # 5. Stream response
         llm_config = self.config.get("llm", {})
@@ -280,7 +340,9 @@ class Orchestrator:
 
         # 6. Post-streaming: update state and store memory
         if response:
-            self.state.add_turn("assistant", response.text, emotion=response.emotion)
+            self._append_transcript(
+                self.state.add_turn("assistant", response.text, emotion=response.emotion)
+            )
             if response.emotion:
                 self.state.current_emotion = response.emotion
             if response.should_store_memory:
@@ -334,34 +396,50 @@ class Orchestrator:
             reference_audio_path=stage.voice_profile_path or "",
         )
 
+    def _wrap_with_context(self, user_text: str, memories_context: str) -> str:
+        """
+        Prepend the per-turn volatile context (memories) to the outgoing
+        user message.
+
+        This content changes every turn, so it lives at the tail of the
+        request — the final message is new tokens regardless — instead of
+        the system prompt, where any changed byte would invalidate Ollama's
+        KV cache for the entire prompt + history behind it.
+
+        Emotion is deliberately NOT injected here: it is an output of each
+        turn (LLM → state → TTS/console/face), and emotional continuity
+        comes from the [emoción] tags replayed in history — see
+        ActorState.get_recent_messages.
+        """
+        if not memories_context:
+            return user_text
+        return f"[Contexto — no es parte del diálogo:\n{memories_context}]\n\n{user_text}"
+
     async def _build_memory_context(self, query: str) -> str:
-        """Build memory context string for the LLM prompt."""
+        """
+        Build memory context string for the LLM prompt.
+
+        Long-term recall only: semantic search across the whole performance.
+        Short-term context is the replayed transcript (get_recent_messages),
+        which persists via _append_transcript — recent memories from the
+        store would just duplicate it.
+        """
         if not self.memory:
             return ""
 
-        # Get relevant memories
-        relevant = await self.memory.search(query, limit=5)
-        recent = await self.memory.get_recent(limit=3)
-
-        # Deduplicate
-        seen_ids = set()
-        all_memories = []
-        for mem in relevant + recent:
-            if mem.id not in seen_ids:
-                seen_ids.add(mem.id)
-                all_memories.append(mem)
-
-        if not all_memories:
+        memories = await self.memory.search(
+            query, limit=self.config.get("memory", {}).get("long_term_search_limit", 5)
+        )
+        if not memories:
             return ""
 
         parts = ["Cosas que recordás:"]
-        for mem in all_memories:
+        for mem in memories:
             emotion_str = f" (sintiendo {mem.emotional_tag})" if mem.emotional_tag else ""
             parts.append(f"- [Edad {mem.age_stage}]{emotion_str}: {mem.content}")
 
-        context = "\n".join(parts)
-        logger.debug(f"📝 Memory context ({len(all_memories)} memories injected into prompt)")
-        return context
+        logger.debug(f"📝 Memory context ({len(memories)} memories injected into prompt)")
+        return "\n".join(parts)
 
     async def _store_interaction(self, user_input: str, response: LLMResponse) -> None:
         """Store a significant interaction in memory."""
@@ -395,10 +473,9 @@ class Orchestrator:
         gets injected into the prompt as one of the character's recuerdos)."""
         stage = self.age_engine.get_current_stage(self.state)
         low, _, high = stage.range.partition("-")
-        await self._store_milestone(
-            f"Crecí: ahora tengo entre {low} y {high} años. "
-            f"Llevo {self.state.hours_elapsed:.1f} horas de vida."
-        )
+        # No mention of hours alive: the character isn't aware of the
+        # accelerated timescale, only of her age (decided 2026-08-16).
+        await self._store_milestone(f"Crecí: ahora tengo entre {low} y {high} años.")
 
     async def _store_milestone(self, content: str) -> None:
         """Store a milestone event in memory."""
@@ -514,7 +591,9 @@ class Orchestrator:
                 if tts_streaming and tag_stripped and tts_sentence_buf.rstrip().endswith((".", "!", "?")):
                     tts_sentence_count += 1
                     if tts_sentence_count >= tts_chunk_size:
-                        sentence = tts_sentence_buf.strip()
+                        # Sanitized: emojis/tags/actions derail the TTS
+                        # (a lone emoji synthesizes as CJK babble)
+                        sentence = sanitize_for_tts(tts_sentence_buf)
                         tts_sentence_buf = ""
                         tts_sentence_count = 0
                         if sentence:
@@ -529,9 +608,9 @@ class Orchestrator:
                                     )
                                 )
 
-            # Flush remaining text to TTS
-            if tts_streaming and tts_sentence_buf.strip():
-                await tts_queue.put(tts_sentence_buf.strip())
+            # Flush remaining text to TTS (sanitized — see above)
+            if tts_streaming and sanitize_for_tts(tts_sentence_buf):
+                await tts_queue.put(sanitize_for_tts(tts_sentence_buf))
                 if tts_task is None or tts_task.done():
                     voice_profile = self._get_voice_profile()
                     tts_task = asyncio.create_task(
@@ -581,6 +660,8 @@ class Orchestrator:
         """Synthesize a whole response at once and play it through afplay."""
         import tempfile
 
+        # Sanitized: emojis/tags/actions derail the TTS (CJK babble)
+        text_to_speak = sanitize_for_tts(text_to_speak) if text_to_speak else ""
         if not (self.tts and text_to_speak):
             return
 

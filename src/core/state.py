@@ -76,13 +76,20 @@ class ActorState:
         """
         Get recent conversation history formatted for LLM input.
 
+        Assistant turns get their parsed [emoción] tag re-prefixed, so the
+        model reads back exactly what it originally emitted: it sees its own
+        emotional arc (continuity without injecting a state instruction) and
+        keeps seeing the output format it must produce.
+
         Returns list of {role, content} dicts.
         """
-        recent = self.conversation_history[-limit:]
-        return [
-            {"role": turn.role, "content": turn.content}
-            for turn in recent
-        ]
+        messages = []
+        for turn in self.conversation_history[-limit:]:
+            content = turn.content
+            if turn.role == "assistant" and turn.emotion:
+                content = f"[{turn.emotion}] {content}"
+            messages.append({"role": turn.role, "content": content})
+        return messages
 
     def add_turn(
         self,

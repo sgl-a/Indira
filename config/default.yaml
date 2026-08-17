@@ -102,10 +102,16 @@ tts:
 memory:
   provider: "chroma"
   persist_directory: "data/memory"
-  embedding_model: "default"
-  # How many recent interactions to always include
-  short_term_limit: 10
-  # How many relevant memories to retrieve
+  collection_name: "ai_actor_memories"
+  # Embedding model for semantic search, served by the local Ollama.
+  #   "default"              = Chroma's built-in all-MiniLM-L6-v2 (English-centric, weak on Spanish)
+  #   "qwen3-embedding:0.6b" = best sub-1GB multilingual (pull first: ollama pull qwen3-embedding:0.6b)
+  # NOTE: embeddings from different models are incompatible — switching
+  # requires deleting data/memory (or a new collection_name).
+  embedding_model: "qwen3-embedding:0.6b"
+  embedding_base_url: "http://localhost:11434"
+  # How many semantically relevant memories to retrieve per turn
+  # (short-term context comes from the replayed transcript, not the store)
   long_term_search_limit: 5
 
 # ─── Audio I/O ───

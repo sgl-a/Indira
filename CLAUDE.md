@@ -32,8 +32,9 @@ ollama pull gemma4:12b        # the currently configured default LLM
 python -m src.main                 # text mode (default, no mic needed)
 python -m src.main --mode audio    # voice mode (mic → STT → LLM → TTS)
 python -m src.main --fresh         # ignore saved performance state, start at hour 0
-# (performance timing persists to data/performance_state.json and auto-resumes
-#  after a crash/restart if still inside the 72h window)
+# (performance timing persists to data/performance_state.json and the conversation
+#  transcript to data/conversation_transcript.jsonl — both auto-resume after a
+#  crash/restart if still inside the 72h window)
 python -m src.main --list-providers
 python -m src.main --config config --env development   # loads config/development.yaml overrides
 
@@ -69,7 +70,9 @@ Mic/text → STT → Orchestrator ⇄ LLM → TTS → speaker (afplay)
 
 - **Config is the control surface.** `config/default.yaml` drives everything. Override precedence: `default.yaml` → `<env>.yaml` (via `AI_ACTOR_ENV` or `--env`) → env vars of the form `AI_ACTOR__SECTION__KEY=value` (double underscores, e.g. `AI_ACTOR__LLM__MODEL=qwen3.5:27b`).
 - **Emotion-tag protocol.** The LLM is prompted (in `age_engine.build_personality_prompt`) to prefix each reply with `[emoción] texto`. `ollama_provider._parse_emotion` and the orchestrator's streaming path parse/strip that leading bracket tag to extract `current_emotion`, which is then mapped to a TTS delivery instruction. Preserve this contract on both the prompt side and any parsing side.
-- **Memory pipeline.** `Memory` objects carry `age_stage`, `emotional_tag`, `importance`, `memory_type` (`interaction` | `milestone`). Retrieval merges semantic `search()` + `get_recent()` and dedupes by id. Age transitions auto-store a `milestone`. `chroma` provider = semantic (vector DB in `data/memory/`); `simple` = keyword fallback.
+- **Prompt-cache contract.** Ollama reuses its KV cache for a byte-identical prompt prefix, so the system prompt (`age_engine.build_personality_prompt`) must stay **byte-stable within an age stage** — no per-turn content in it. Everything volatile (retrieved memories) rides in the `[Contexto ...]` envelope prepended to the *newest* user message (`orchestrator._wrap_with_context`); history stores clean text so replay stays prefix-stable. Emotion is **output-only** (LLM → `state.current_emotion` → TTS/console) — never inject it back into the prompt; continuity comes from `get_recent_messages` re-prefixing `[emoción]` tags onto replayed assistant turns.
+- **TTS input must be sanitized.** Emojis, inline `[tags]`, and `*actions*` derail Qwen3-TTS into wrong-language babble (verified by closed-loop probing). All text reaching a TTS provider goes through `text_filters.sanitize_for_tts()` first; skip synthesis when it returns `""`. The console still shows the original text.
+- **Memory pipeline.** Short-term = the replayed 20-turn transcript (persisted to `data/conversation_transcript.jsonl`, auto-restored on resume). Long-term = `Memory` objects (`age_stage`, `emotional_tag`, `importance`, `memory_type` `interaction` | `milestone`) retrieved by semantic `search()` only. Age transitions auto-store a `milestone`. `chroma` provider = semantic (vector DB in `data/memory/`, embedder set by `memory.embedding_model` — switching embedders needs a fresh collection); `simple` = keyword fallback.
 - **Ollama specifics.** `think: false` in config disables model thinking (Qwen 3.5 respects it, Qwen3 ignores it); `ollama_provider._strip_thinking` removes any leaked `<think>` blocks. HTTP timeout is 10 min for large models. Note Ollama unloads models after ~5 min idle — pin with `OLLAMA_KEEP_ALIVE=-1` for latency-sensitive runs.
 
 ## Large / ignored assets

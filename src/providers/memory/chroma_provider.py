@@ -49,6 +49,8 @@ class ChromaMemoryProvider(MemoryProvider):
         self.client = None
         self.collection = None
         self._persist_dir: str | None = None
+        self._embedding_model: str = "default"
+        self._collection_kwargs: dict = {}
         # Newest-first buffer of recent memories (see _RECENT_BUFFER_SIZE)
         self._recent: deque[Memory] = deque(maxlen=_RECENT_BUFFER_SIZE)
 
@@ -63,9 +65,12 @@ class ChromaMemoryProvider(MemoryProvider):
                 "Install with: pip install chromadb"
             )
 
-        memory_config = config.get("memory", {})
+        # The registry passes the memory *section* of the config directly
+        # (accept a full config dict too, for direct/test construction)
+        memory_config = config.get("memory", config)
         self._persist_dir = memory_config.get("persist_directory", "data/memory")
         collection_name = memory_config.get("collection_name", "ai_actor_memories")
+        self._embedding_model = memory_config.get("embedding_model", "default")
 
         # Ensure persist directory exists
         Path(self._persist_dir).mkdir(parents=True, exist_ok=True)
@@ -76,17 +81,42 @@ class ChromaMemoryProvider(MemoryProvider):
             settings=Settings(anonymized_telemetry=False),
         )
 
-        # Create or get collection
-        # ChromaDB uses its own default embedding function (all-MiniLM-L6-v2)
-        self.collection = self.client.get_or_create_collection(
-            name=collection_name,
-            metadata={"hnsw:space": "cosine"},
-        )
+        # "default" = Chroma's built-in all-MiniLM-L6-v2 (English-centric —
+        # weak for the Spanish memory strings). Anything else is treated as
+        # an Ollama embedding model name (e.g. "qwen3-embedding:0.6b"),
+        # served by the same Ollama instance as the LLM.
+        self._collection_kwargs = {
+            "name": collection_name,
+            # embedding_model recorded so a config/collection mismatch can
+            # be caught below instead of failing as a cryptic dimension
+            # error on the first query
+            "metadata": {"hnsw:space": "cosine", "embedding_model": self._embedding_model},
+        }
+        if self._embedding_model != "default":
+            from chromadb.utils.embedding_functions import OllamaEmbeddingFunction
+
+            self._collection_kwargs["embedding_function"] = OllamaEmbeddingFunction(
+                url=memory_config.get("embedding_base_url", "http://localhost:11434"),
+                model_name=self._embedding_model,
+            )
+
+        self.collection = self.client.get_or_create_collection(**self._collection_kwargs)
+
+        stored_model = (self.collection.metadata or {}).get("embedding_model", "default")
+        if stored_model != self._embedding_model:
+            raise RuntimeError(
+                f"Memory collection '{collection_name}' was built with embedding model "
+                f"'{stored_model}' but config asks for '{self._embedding_model}'. "
+                f"Embeddings from different models are incompatible — either delete "
+                f"{self._persist_dir} (memories are lost) or set memory.collection_name "
+                f"to a new name."
+            )
 
         existing_count = self.collection.count()
         self._seed_recent_buffer()
         logger.info(
             f"ChromaDB initialized. Collection: {collection_name}, "
+            f"Embedding: {self._embedding_model}, "
             f"Existing memories: {existing_count}, "
             f"Persist: {self._persist_dir}"
         )
@@ -236,10 +266,7 @@ class ChromaMemoryProvider(MemoryProvider):
         name = self.collection.name
         try:
             self.client.delete_collection(name)
-            self.collection = self.client.get_or_create_collection(
-                name=name,
-                metadata={"hnsw:space": "cosine"},
-            )
+            self.collection = self.client.get_or_create_collection(**self._collection_kwargs)
             self._recent.clear()
             logger.info(f"ChromaDB memory cleared. Collection {name} reset.")
         except Exception as e:

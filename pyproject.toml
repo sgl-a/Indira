@@ -18,7 +18,10 @@ dependencies = [
 [project.optional-dependencies]
 whisper = ["openai-whisper>=20231117"]
 tts = ["kokoro>=0.9"]
-memory = ["chromadb>=0.4"]
+memory = [
+    "chromadb>=0.4",
+    "ollama>=0.4",  # client used by Chroma's OllamaEmbeddingFunction (memory.embedding_model)
+]
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",

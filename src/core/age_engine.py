@@ -151,6 +151,11 @@ class AgeEngine:
 
         Combines permanent identity with age-specific traits.
         All in Spanish to match the performance language.
+
+        Deliberately contains ONLY per-stage-stable content: Ollama reuses
+        its KV cache for the byte-identical prompt prefix across requests,
+        so anything that changes per turn (emotion, memories) goes in the
+        outgoing user message instead (see Orchestrator._wrap_with_context).
         """
         stage = self.get_current_stage(state)
         personality = config.get("llm", {}).get("personality", {})
@@ -161,7 +166,6 @@ class AgeEngine:
         # Build the prompt
         prompt_parts = [
             f"Sos {name}, tenés {stage.range} años.",
-            f"Llevás {state.hours_elapsed:.1f} horas de vida.",
         ]
 
         # Permanent identity rules (from config)
@@ -202,10 +206,13 @@ class AgeEngine:
             "",
             "## Formato",
             "Respondé solo con lo que dirías en voz alta.",
+            "Sin emojis, sin acciones entre asteriscos, sin acotaciones escénicas.",
             "Antes de tu línea, poné una etiqueta de emoción entre corchetes.",
             "Ejemplo: [cálida, nostálgica] Me acuerdo cuando me enseñaste esa palabra.",
             "",
-            f"Tu estado emocional actual: {state.current_emotion}",
+            "Los mensajes pueden empezar con un bloque [Contexto ...]: son",
+            "tus recuerdos, información interna tuya, no algo que te dijeron.",
+            "No lo menciones ni lo leas en voz alta.",
         ])
 
         return "\n".join(prompt_parts)
