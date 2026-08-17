@@ -1,0 +1,8 @@
+# Development overrides — load with: python -m src.main --env development
+# (or AI_ACTOR_ENV=development)
+
+memory:
+  # Tiny short-term window so memory consolidation fires after ~5 exchanges
+  # instead of ~40 (production values live in default.yaml)
+  history_max_turns: 10
+  history_trim_to: 6

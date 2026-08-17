@@ -108,13 +108,13 @@ class AgeEngine:
 
     def get_current_stage(self, state: ActorState) -> AgeStage:
         """Determine the current age stage based on elapsed time."""
-        hours = state.hours_elapsed
+        return self.stage_for_hours(state.hours_elapsed)
 
-        for i, stage in enumerate(self.stages):
+    def stage_for_hours(self, hours: float) -> AgeStage:
+        """Map an elapsed-hours value to its age stage (last stage if past the end)."""
+        for stage in self.stages:
             if stage.start_hour <= hours < stage.end_hour:
                 return stage
-
-        # If past all stages, return the last one
         return self.stages[-1]
 
     def get_stage_index(self, state: ActorState) -> int:

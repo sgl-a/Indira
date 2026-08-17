@@ -53,6 +53,10 @@ class ActorState:
 
     # ─── Conversation ───
     conversation_history: list[ConversationTurn] = field(default_factory=list)
+    # Index of the first turn still in the short-term window. Turns before
+    # this have been dropped from the prompt (and consolidated into
+    # long-term memories); the full transcript stays in the list.
+    history_window_start: int = 0
     last_interaction_time: float = 0.0
     is_speaking: bool = False
     is_listening: bool = False
@@ -72,9 +76,13 @@ class ActorState:
     def is_running(self) -> bool:
         return self.performance_phase == PerformancePhase.RUNNING
 
-    def get_recent_messages(self, limit: int = 20) -> list[dict]:
+    def get_recent_messages(self, limit: int | None = None) -> list[dict]:
         """
-        Get recent conversation history formatted for LLM input.
+        Get the short-term window formatted for LLM input.
+
+        Returns every turn from `history_window_start` onward (the window
+        only moves in blocks — see trim_history — so the replayed prefix
+        stays byte-stable for the prompt cache between trims).
 
         Assistant turns get their parsed [emoción] tag re-prefixed, so the
         model reads back exactly what it originally emitted: it sees its own
@@ -83,13 +91,34 @@ class ActorState:
 
         Returns list of {role, content} dicts.
         """
+        window = self.conversation_history[self.history_window_start:]
+        if limit is not None:
+            window = window[-limit:]
         messages = []
-        for turn in self.conversation_history[-limit:]:
+        for turn in window:
             content = turn.content
             if turn.role == "assistant" and turn.emotion:
                 content = f"[{turn.emotion}] {content}"
             messages.append({"role": turn.role, "content": content})
         return messages
+
+    def trim_history(self, max_turns: int, trim_to: int) -> list[ConversationTurn]:
+        """
+        Block-trim the short-term window: once it exceeds `max_turns`,
+        advance the window start so `trim_to` turns remain, and return the
+        dropped turns (for consolidation into long-term memory).
+
+        Trimming in blocks instead of sliding one turn at a time keeps the
+        replayed history prefix-stable for the LLM KV cache between trims.
+        Returns [] when no trim happened.
+        """
+        window_len = len(self.conversation_history) - self.history_window_start
+        if window_len <= max_turns:
+            return []
+        new_start = len(self.conversation_history) - trim_to
+        dropped = self.conversation_history[self.history_window_start:new_start]
+        self.history_window_start = new_start
+        return dropped
 
     def add_turn(
         self,

@@ -72,6 +72,17 @@ class Orchestrator:
             system_config.get("transcript_file", "data/conversation_transcript.jsonl")
         )
 
+        # Short-term window + memory consolidation (see _consolidate_block)
+        memory_config = config.get("memory", {})
+        self._history_max_turns = memory_config.get("history_max_turns", 80)
+        self._history_trim_to = memory_config.get("history_trim_to", 60)
+        consolidation_config = memory_config.get("consolidation", {})
+        self._consolidation_enabled = consolidation_config.get("enabled", True)
+        self._consolidation_temperature = consolidation_config.get("temperature", 0.3)
+        self._consolidation_max_tokens = consolidation_config.get("max_tokens", 400)
+        self._consolidation_queue: asyncio.Queue[list[ConversationTurn]] = asyncio.Queue()
+        self._consolidation_task: asyncio.Task | None = None
+
     def _start_or_resume_performance(self) -> bool:
         """
         Start the performance, resuming a previous run if a saved state
@@ -93,6 +104,12 @@ class Orchestrator:
                     self.state.last_interaction_time = time.time()
                     self.age_engine.update_state(self.state)
                     restored_turns = self._load_transcript()
+                    # Restore the window position so already-consolidated
+                    # turns aren't re-consolidated (duplicate memories) or
+                    # replayed into the prompt
+                    self.state.history_window_start = min(
+                        int(data.get("history_window_start", 0)), restored_turns
+                    )
                     logger.info(
                         f"⏮️  Resumed performance at hour {elapsed_hours:.1f} "
                         f"(age stage {self.state.current_age_stage}, "
@@ -168,6 +185,7 @@ class Orchestrator:
             tmp = self._state_file.with_suffix(".tmp")
             tmp.write_text(json.dumps({
                 "performance_start_time": self.state.performance_start_time,
+                "history_window_start": self.state.history_window_start,
                 "saved_at": time.time(),
             }))
             tmp.replace(self._state_file)
@@ -189,6 +207,11 @@ class Orchestrator:
         except Exception as e:
             logger.warning(f"STT initialization failed: {e}. Running in text-only mode.")
 
+        # Background memory consolidation (turns dropped from the short-term
+        # window get compressed into long-term memories while she's idle)
+        if self._consolidation_enabled and self.llm and self.memory:
+            self._consolidation_task = asyncio.create_task(self._consolidation_worker())
+
         logger.info("✅ All providers initialized")
 
     async def shutdown(self) -> None:
@@ -198,6 +221,8 @@ class Orchestrator:
 
         if self._proactive_task:
             self._proactive_task.cancel()
+        if self._consolidation_task:
+            self._consolidation_task.cancel()
 
         for provider in [self.stt, self.llm, self.tts, self.memory]:
             if provider:
@@ -245,10 +270,15 @@ class Orchestrator:
         # 3. Build system prompt (stable per age stage — Ollama KV-cache friendly)
         system_prompt = self.age_engine.build_personality_prompt(self.state, self.config)
 
-        # 4. Get conversation history; volatile context (memories)
-        # rides on the newest message only — the stored turn keeps the clean
-        # text so history replay stays byte-stable for the prompt cache
-        messages = self.state.get_recent_messages(limit=20)
+        # 4. Get conversation history. (Safety-net trim only: the window is
+        # normally trimmed between turns by _post_turn_maintenance so the
+        # KV re-prefill happens while idle, not on a live turn.) Volatile
+        # context (memories) rides on the newest message only — the stored
+        # turn keeps the clean text so replay stays byte-stable for the cache
+        self._queue_dropped_turns(
+            self.state.trim_history(self._history_max_turns, self._history_trim_to)
+        )
+        messages = self.state.get_recent_messages()
         messages[-1]["content"] = self._wrap_with_context(user_text, memories_context)
 
         # 5. Generate response
@@ -267,9 +297,13 @@ class Orchestrator:
         if response.emotion:
             self.state.current_emotion = response.emotion
 
-        # 7. Store in memory if significant
-        if response.should_store_memory:
+        # 7. Store in memory. With consolidation on, long-term memories are
+        # written when turns leave the short-term window, not per turn.
+        if not self._consolidation_enabled and response.should_store_memory:
             await self._store_interaction(user_text, response)
+
+        # 8. Between-turns maintenance (trim + cache prewarm, runs in the gap)
+        self._post_turn_maintenance()
 
         # Log performance
         logger.debug(
@@ -307,10 +341,15 @@ class Orchestrator:
         # 3. Build system prompt (stable per age stage — Ollama KV-cache friendly)
         system_prompt = self.age_engine.build_personality_prompt(self.state, self.config)
 
-        # 4. Get conversation history; volatile context (memories)
-        # rides on the newest message only — the stored turn keeps the clean
-        # text so history replay stays byte-stable for the prompt cache
-        messages = self.state.get_recent_messages(limit=20)
+        # 4. Get conversation history. (Safety-net trim only: the window is
+        # normally trimmed between turns by _post_turn_maintenance so the
+        # KV re-prefill happens while idle, not on a live turn.) Volatile
+        # context (memories) rides on the newest message only — the stored
+        # turn keeps the clean text so replay stays byte-stable for the cache
+        self._queue_dropped_turns(
+            self.state.trim_history(self._history_max_turns, self._history_trim_to)
+        )
+        messages = self.state.get_recent_messages()
         messages[-1]["content"] = self._wrap_with_context(user_text, memories_context)
 
         # 5. Stream response
@@ -345,8 +384,12 @@ class Orchestrator:
             )
             if response.emotion:
                 self.state.current_emotion = response.emotion
-            if response.should_store_memory:
+            # With consolidation on, long-term memories are written when
+            # turns leave the short-term window, not per turn
+            if not self._consolidation_enabled and response.should_store_memory:
                 await self._store_interaction(user_text, response)
+            # Between-turns maintenance (trim + cache prewarm, runs in the gap)
+            self._post_turn_maintenance()
 
 
         # Yield final response for caller to use if needed
@@ -467,6 +510,192 @@ class Orchestrator:
             memory_type="interaction",
         )
         await self.memory.store(memory)
+
+    # ─── Memory consolidation ───────────────────────────────────────────
+    # When turns leave the short-term window they get compressed into a few
+    # long-term memories, written by the LLM in the character's own voice at
+    # her current age, each with a self-scored importance. Runs in the
+    # background while she's idle so it never delays a live response.
+
+    def _post_turn_maintenance(self) -> None:
+        """
+        Runs after each completed turn, so heavy bookkeeping lands in the
+        idle gap between turns instead of delaying a live response.
+
+        Trims the window one exchange EARLY (max_turns - 1): the next user
+        turn would push it over the limit, and trimming on that turn would
+        change the request prefix mid-conversation — a full KV re-prefill
+        (seconds of extra first-token latency) paid on a live turn. Trimming
+        now and pre-warming the cache in the background makes the re-prefill
+        invisible instead.
+        """
+        dropped = self.state.trim_history(self._history_max_turns - 1, self._history_trim_to)
+        if dropped:
+            self._queue_dropped_turns(dropped)
+            asyncio.create_task(self._prewarm_cache())
+
+    async def _prewarm_cache(self) -> None:
+        """Re-prefill Ollama's KV cache with the post-trim prefix (system
+        prompt + trimmed window) so the next live turn starts from a warm
+        cache. Waits until she's idle; the 1-token generation is discarded."""
+        if not self.llm:
+            return
+        while self.state.is_speaking:
+            await asyncio.sleep(0.5)
+        try:
+            system_prompt = self.age_engine.build_personality_prompt(self.state, self.config)
+            messages = self.state.get_recent_messages()
+            if not messages:
+                return
+            await self.llm.generate(
+                system_prompt=system_prompt,
+                messages=messages,
+                temperature=0.0,
+                max_tokens=1,
+            )
+            logger.debug("🔥 KV cache pre-warmed with post-trim prefix")
+        except Exception as e:
+            logger.debug(f"Cache prewarm failed (harmless, next turn just re-prefills): {e}")
+
+    def _queue_dropped_turns(self, dropped: list[ConversationTurn]) -> None:
+        """Hand turns that fell out of the short-term window to the
+        consolidation worker, and persist the new window position."""
+        if not dropped:
+            return
+        self._persist_performance_state()
+        if self._consolidation_enabled and self.llm and self.memory:
+            self._consolidation_queue.put_nowait(dropped)
+            logger.debug(f"🧠 Queued {len(dropped)} turns for consolidation")
+
+    async def _consolidation_worker(self) -> None:
+        """Background task: consolidate dropped blocks whenever she's idle."""
+        while True:
+            block = await self._consolidation_queue.get()
+            # Wait for the current turn (generation + speech) to finish so
+            # the consolidation call never competes with a live response
+            while self.state.is_speaking:
+                await asyncio.sleep(0.5)
+            try:
+                await self._consolidate_block(block)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning(f"Consolidation failed ({e}); storing mechanical fallback")
+                await self._store_block_fallback(block)
+
+    async def _consolidate_block(self, block: list[ConversationTurn]) -> None:
+        """Compress a block of dropped turns into 0-3 long-term memories."""
+        if not (self.llm and self.memory and block):
+            return
+
+        # Age stage at the time the block happened (not necessarily now)
+        stage = self._stage_for_timestamp(block[-1].timestamp)
+        name = self.config.get("llm", {}).get("personality", {}).get("name", "Indira")
+
+        transcript = "\n".join(
+            f"{'Mamá' if turn.role == 'user' else name}: {turn.content}"
+            for turn in block
+        )
+
+        system_prompt = (
+            f"Sos {name}, tenés {stage.range} años. Este fragmento de una charla con tu mamá "
+            f"está por desvanecerse de tu memoria inmediata. Escribí los recuerdos que te "
+            f"quedan de él: entre cero y tres.\n"
+            f"\n"
+            f"Reglas:\n"
+            f"- Cada recuerdo: una o dos frases, en primera persona, con tus palabras de "
+            f"ahora, a tus {stage.range} años.\n"
+            f"- Guardá solo lo que importa. Importancia 0.7 a 1.0: revelaciones, emociones "
+            f"fuertes, promesas, peleas, cosas nuevas sobre tu mamá o sobre vos. "
+            f"0.4 a 0.6: una charla significativa. Menos que eso no se recuerda.\n"
+            f"- Si no pasó nada que valga la pena recordar, respondé únicamente: NADA\n"
+            f"- Formato: una línea JSON por recuerdo, sin ningún otro texto:\n"
+            f'{{"recuerdo": "...", "emocion": "...", "importancia": 0.0}}'
+        )
+
+        response = await self.llm.generate(
+            system_prompt=system_prompt,
+            messages=[{"role": "user", "content": transcript}],
+            temperature=self._consolidation_temperature,
+            max_tokens=self._consolidation_max_tokens,
+        )
+
+        parsed = self._parse_consolidation(response.text)
+        if parsed:
+            for mem in parsed:
+                await self.memory.store(Memory(
+                    id=str(uuid.uuid4()),
+                    content=mem["recuerdo"],
+                    age_stage=stage.range,
+                    emotional_tag=mem.get("emocion"),
+                    importance=mem["importancia"],
+                    memory_type="consolidated",
+                ))
+            logger.info(
+                f"🧠 Consolidated {len(block)} turns → {len(parsed)} memories "
+                f"(edad {stage.range})"
+            )
+        elif "{" in response.text:
+            # The model tried to emit memories but none parsed — don't lose the block
+            logger.warning("Consolidation output unparseable; storing mechanical fallback")
+            await self._store_block_fallback(block)
+        else:
+            # Model judged the block not worth remembering ("NADA")
+            logger.info(f"🧠 Consolidated {len(block)} turns → nothing memorable")
+
+    @staticmethod
+    def _parse_consolidation(raw: str) -> list[dict]:
+        """
+        Parse the consolidation reply: one JSON object per line
+        ({"recuerdo", "emocion", "importancia"}). Garbage lines are
+        skipped; importancia is clamped to [0, 1]. NDJSON (not a JSON
+        array) so a leading '[' can't be mistaken for an emotion tag.
+        """
+        memories = []
+        for line in raw.splitlines():
+            line = line.strip().strip("`").strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                data = json.loads(line)
+                content = str(data.get("recuerdo", "")).strip()
+                if not content:
+                    continue
+                importance = min(1.0, max(0.0, float(data.get("importancia", 0.5))))
+                emotion = str(data.get("emocion", "")).strip() or None
+                memories.append(
+                    {"recuerdo": content, "emocion": emotion, "importancia": importance}
+                )
+            except (ValueError, TypeError):
+                continue
+        return memories[:3]
+
+    async def _store_block_fallback(self, block: list[ConversationTurn]) -> None:
+        """Mechanical fallback when consolidation fails: store a truncated
+        first-exchange summary (today's pre-consolidation behavior) so the
+        block leaves at least some trace in long-term memory."""
+        if not (self.memory and block):
+            return
+        name = self.config.get("llm", {}).get("personality", {}).get("name", "Indira")
+        user_part = next((t.content for t in block if t.role == "user"), "")[:150].strip()
+        reply_part = next((t.content for t in block if t.role == "assistant"), "")[:200].strip()
+        if not (user_part or reply_part):
+            return
+        stage = self._stage_for_timestamp(block[-1].timestamp)
+        await self.memory.store(Memory(
+            id=str(uuid.uuid4()),
+            content=f"Mamá dijo: {user_part}. {name} respondió: {reply_part}",
+            age_stage=stage.range,
+            importance=0.5,
+            memory_type="consolidated",
+        ))
+
+    def _stage_for_timestamp(self, timestamp: float):
+        """Age stage at a given wall-clock time (falls back to current)."""
+        if self.state.performance_start_time is None:
+            return self.age_engine.get_current_stage(self.state)
+        hours = (timestamp - self.state.performance_start_time) / 3600
+        return self.age_engine.stage_for_hours(hours)
 
     async def _store_age_milestone(self) -> None:
         """Store an age transition as a milestone memory (in Spanish — it

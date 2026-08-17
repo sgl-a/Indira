@@ -63,6 +63,8 @@ llm:
   max_tokens: 1024
   streaming: true   # LLM word-by-word display (false = wait for full response then print at once)
   think: false      # Enable/disable model thinking (Qwen 3.5 respects this; Qwen3 ignores it)
+  keep_alive: -1    # Sent per-request: -1 = model never unloads (no cold starts after silences).
+                    # Use e.g. "10m" to allow unloading on dev machines short on RAM.
   # Permanent identity (constant across all ages)
   personality:
     name: "Indira"
@@ -113,6 +115,21 @@ memory:
   # How many semantically relevant memories to retrieve per turn
   # (short-term context comes from the replayed transcript, not the store)
   long_term_search_limit: 5
+  # Short-term window: turns kept verbatim in the prompt. Grows to max,
+  # then trims back in one block (keeps the replayed prefix byte-stable
+  # for the LLM KV cache). Dropped turns are consolidated below.
+  history_max_turns: 80
+  history_trim_to: 60
+  # Consolidation: when turns leave the window, the LLM (as the character,
+  # at her current age) compresses them into 0-3 first-person memories,
+  # each with a self-scored importance. Runs in the background while idle.
+  # enabled: false restores the old behavior (every turn stored at 0.5).
+  # NOTE: run Ollama with OLLAMA_NUM_PARALLEL=2 so the consolidation call
+  # doesn't evict the conversation's KV cache slot.
+  consolidation:
+    enabled: true
+    temperature: 0.3
+    max_tokens: 400
 
 # ─── Audio I/O ───
 audio:

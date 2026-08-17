@@ -86,12 +86,17 @@ class OllamaLLMProvider(LLMProvider):
         self.model: str = "llama3.1:8b"
         self.base_url: str = "http://localhost:11434"
         self.think: bool = False
+        self.keep_alive: int | str = -1
         self.client: httpx.AsyncClient | None = None
 
     async def initialize(self, config: dict) -> None:
         self.model = config.get("model", "llama3.1:8b")
         self.base_url = config.get("base_url", "http://localhost:11434")
         self.think = config.get("think", False)
+        # -1 = keep the model loaded indefinitely. Sent per-request so it
+        # works regardless of how the Ollama server is configured/installed
+        # (the OLLAMA_KEEP_ALIVE env var never reaches the desktop app).
+        self.keep_alive = config.get("keep_alive", -1)
         self.client = httpx.AsyncClient(
             base_url=self.base_url,
             timeout=httpx.Timeout(600.0, connect=10.0),  # 10min for large models
@@ -139,6 +144,7 @@ class OllamaLLMProvider(LLMProvider):
             "messages": full_messages,
             "stream": False,
             "think": self.think,  # Configurable thinking mode
+            "keep_alive": self.keep_alive,  # -1 = never unload (avoid cold starts mid-show)
             "options": {
                 "temperature": temperature,
                 "num_predict": max_tokens,
@@ -181,6 +187,7 @@ class OllamaLLMProvider(LLMProvider):
             "messages": full_messages,
             "stream": True,
             "think": self.think,  # Configurable thinking mode
+            "keep_alive": self.keep_alive,  # -1 = never unload (avoid cold starts mid-show)
             "options": {
                 "temperature": temperature,
                 "num_predict": max_tokens,
@@ -227,6 +234,7 @@ class OllamaLLMProvider(LLMProvider):
             "messages": full_messages,
             "stream": True,
             "think": self.think,  # Configurable thinking mode
+            "keep_alive": self.keep_alive,  # -1 = never unload (avoid cold starts mid-show)
             "options": {
                 "temperature": temperature,
                 "num_predict": max_tokens,
@@ -292,6 +300,18 @@ class OllamaLLMProvider(LLMProvider):
 
     async def shutdown(self) -> None:
         if self.client:
+            # keep_alive: -1 pins the model in RAM for the whole run —
+            # explicitly unload it on clean shutdown so quitting the app
+            # frees the memory (keep_alive: 0 = unload now)
+            try:
+                await self.client.post(
+                    "/api/generate",
+                    json={"model": self.model, "keep_alive": 0},
+                    timeout=10.0,
+                )
+                logger.info(f"Ollama model {self.model} unloaded")
+            except Exception as e:
+                logger.debug(f"Could not unload model on shutdown: {e}")
             await self.client.aclose()
 
     @staticmethod

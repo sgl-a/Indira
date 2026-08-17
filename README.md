@@ -49,10 +49,12 @@ pip install -e ".[whisper,tts,dev]"
 
 ```bash
 # Run in a separate terminal tab
-ollama serve
+#ollama serve
+
+./scripts/start_ollama.sh 
 ```
 
-> **Tip:** Use `ollama serve` instead of `brew services start ollama` for manual control — just `Ctrl+C` to stop. Either way, Ollama auto-unloads models from RAM after 5 minutes of inactivity.
+> **Tip:** Always use `scripts/start_ollama.sh` (not a bare `ollama serve`) — it sets `OLLAMA_NUM_PARALLEL=2` so background memory-consolidation calls don't evict the conversation's KV cache. Model keep-alive is handled per-request by the app (`llm.keep_alive: -1` — the model stays loaded for the whole run and is explicitly unloaded on `/quit`).
 
 ### 4. Pull a Model
 
@@ -75,6 +77,47 @@ ollama pull llama3.1:8b
 source .venv/bin/activate
 python3 -m src.main
 ```
+
+## Launch Options
+
+```bash
+python3 -m src.main [flags]
+```
+
+| Flag | Description |
+|------|-------------|
+| *(none)* | Text mode. Auto-resumes a running performance (hour, age, conversation transcript) if still inside the 72h window |
+| `--mode audio` | Voice mode: microphone → Whisper STT → LLM → TTS → speaker (VAD-gated, mic pauses while she speaks) |
+| `--mode text` | Text mode, explicit (the default) |
+| `--fresh` | Start the performance from hour 0 — discards the saved performance clock **and** the conversation transcript |
+| `--env NAME` | Overlay `config/NAME.yaml` on top of `default.yaml` (e.g. `--env development`) |
+| `--config DIR` | Config directory (default: `config/`) |
+| `--log-level LEVEL` | Override log level (`DEBUG` shows consolidation, TTS instructs, cache prewarms) |
+| `--list-providers` | Print registered STT/LLM/TTS/Memory providers and exit |
+
+Common recipes:
+
+```bash
+# Normal session (resumes mid-performance after a crash/restart)
+python3 -m src.main
+
+# Voice mode
+python3 -m src.main --mode audio
+
+# Dev session: tiny memory window so consolidation fires after ~5 exchanges
+# (production waits ~40 — see memory.history_max_turns)
+python3 -m src.main --env development
+
+# Fresh start with full internals visible
+python3 -m src.main --fresh --log-level DEBUG
+
+# One-off config overrides via env vars (double underscore = section nesting)
+AI_ACTOR__LLM__MODEL=qwen3.5:9b python3 -m src.main
+AI_ACTOR__MEMORY__CONSOLIDATION__ENABLED=false python3 -m src.main
+AI_ACTOR_ENV=development python3 -m src.main            # same as --env development
+```
+
+Override precedence: `config/default.yaml` → `config/<env>.yaml` → `AI_ACTOR__*` env vars.
 
 ## Text Mode Commands
 
@@ -114,7 +157,7 @@ python3 -m src.main --list-providers
 ```
 STT: whisper
 LLM: ollama
-TTS: kokoro, system
+TTS: system, kokoro, qwen
 MEMORY: chroma, simple
 ```
 
@@ -199,7 +242,7 @@ ollama pull <model>            # Download a model
 ollama rm <model>              # Remove a model (frees disk space)
 ```
 
-> **RAM note:** Ollama loads model weights into memory (~5-20GB depending on model). Models auto-unload after 5 minutes of idle. Use `ollama ps` to see what's currently loaded.
+> **RAM note:** Ollama loads model weights into memory (~5-20GB depending on model). While the AI Actor runs, the LLM stays pinned (`llm.keep_alive: -1` — no cold starts after silences) and is unloaded on `/quit`; the embedding model self-unloads after ~5 min. Use `ollama ps` to see what's loaded, `ollama stop <model>` to free RAM manually after a crash.
 
 ## Documentation
 
