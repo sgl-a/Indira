@@ -172,46 +172,6 @@ class OllamaLLMProvider(LLMProvider):
             tokens_generated=eval_count,
         )
 
-    async def stream_generate(
-        self,
-        system_prompt: str,
-        messages: list[dict],
-        temperature: float = 0.7,
-        max_tokens: int = 512,
-    ) -> AsyncIterator[str]:
-        full_messages = [{"role": "system", "content": system_prompt}]
-        full_messages.extend(messages)
-
-        payload = {
-            "model": self.model,
-            "messages": full_messages,
-            "stream": True,
-            "think": self.think,  # Configurable thinking mode
-            "keep_alive": self.keep_alive,  # -1 = never unload (avoid cold starts mid-show)
-            "options": {
-                "temperature": temperature,
-                "num_predict": max_tokens,
-            },
-        }
-
-        think_filter = _ThinkTagFilter()
-        async with self.client.stream("POST", "/api/chat", json=payload) as resp:
-            resp.raise_for_status()
-            async for line in resp.aiter_lines():
-                if line:
-                    try:
-                        data = json.loads(line)
-                        content = data.get("message", {}).get("content", "")
-                        if content:
-                            clean = think_filter.feed(content)
-                            if clean:
-                                yield clean
-                    except json.JSONDecodeError:
-                        continue
-        tail = think_filter.flush()
-        if tail:
-            yield tail
-
     async def stream_generate_with_metadata(
         self,
         system_prompt: str,

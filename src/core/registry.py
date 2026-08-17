@@ -38,6 +38,15 @@ _MEMORY_PROVIDERS: dict[str, str] = {
     "simple": "src.providers.memory.simple_provider.SimpleMemoryProvider",
 }
 
+# Category → (registry, default provider name). The single source of truth
+# for what exists; the create_* functions below are typed wrappers over it.
+_CATEGORIES: dict[str, tuple[dict[str, str], str]] = {
+    "stt": (_STT_PROVIDERS, "whisper"),
+    "llm": (_LLM_PROVIDERS, "ollama"),
+    "tts": (_TTS_PROVIDERS, "system"),
+    "memory": (_MEMORY_PROVIDERS, "simple"),
+}
+
 
 def _import_class(dotted_path: str) -> Type:
     """Import a class from a dotted path string."""
@@ -47,76 +56,44 @@ def _import_class(dotted_path: str) -> Type:
     return getattr(module, class_name)
 
 
-async def create_stt_provider(config: dict) -> STTProvider:
-    """Create and initialize an STT provider from config."""
-    stt_config = config.get("stt", {})
-    provider_name = stt_config.get("provider", "whisper")
+async def _create_provider(category: str, config: dict):
+    """Create and initialize a provider of `category` from config."""
+    registry, default_name = _CATEGORIES[category]
+    section = config.get(category, {})
+    provider_name = section.get("provider", default_name)
 
-    if provider_name not in _STT_PROVIDERS:
+    if provider_name not in registry:
         raise ValueError(
-            f"Unknown STT provider: '{provider_name}'. "
-            f"Available: {list(_STT_PROVIDERS.keys())}"
+            f"Unknown {category} provider: '{provider_name}'. "
+            f"Available: {list(registry.keys())}"
         )
 
-    cls = _import_class(_STT_PROVIDERS[provider_name])
+    cls = _import_class(registry[provider_name])
     provider = cls()
-    await provider.initialize(stt_config)
-    logger.info(f"STT provider initialized: {provider_name}")
+    await provider.initialize(section)
+    detail = f" ({section.get('model', 'default')})" if "model" in section else ""
+    logger.info(f"{category.upper()} provider initialized: {provider_name}{detail}")
     return provider
+
+
+async def create_stt_provider(config: dict) -> STTProvider:
+    """Create and initialize an STT provider from config."""
+    return await _create_provider("stt", config)
 
 
 async def create_llm_provider(config: dict) -> LLMProvider:
     """Create and initialize an LLM provider from config."""
-    llm_config = config.get("llm", {})
-    provider_name = llm_config.get("provider", "ollama")
-
-    if provider_name not in _LLM_PROVIDERS:
-        raise ValueError(
-            f"Unknown LLM provider: '{provider_name}'. "
-            f"Available: {list(_LLM_PROVIDERS.keys())}"
-        )
-
-    cls = _import_class(_LLM_PROVIDERS[provider_name])
-    provider = cls()
-    await provider.initialize(llm_config)
-    logger.info(f"LLM provider initialized: {provider_name} ({llm_config.get('model', 'default')})")
-    return provider
+    return await _create_provider("llm", config)
 
 
 async def create_tts_provider(config: dict) -> TTSProvider:
     """Create and initialize a TTS provider from config."""
-    tts_config = config.get("tts", {})
-    provider_name = tts_config.get("provider", "system")
-
-    if provider_name not in _TTS_PROVIDERS:
-        raise ValueError(
-            f"Unknown TTS provider: '{provider_name}'. "
-            f"Available: {list(_TTS_PROVIDERS.keys())}"
-        )
-
-    cls = _import_class(_TTS_PROVIDERS[provider_name])
-    provider = cls()
-    await provider.initialize(tts_config)
-    logger.info(f"TTS provider initialized: {provider_name}")
-    return provider
+    return await _create_provider("tts", config)
 
 
 async def create_memory_provider(config: dict) -> MemoryProvider:
     """Create and initialize a memory provider from config."""
-    memory_config = config.get("memory", {})
-    provider_name = memory_config.get("provider", "simple")
-
-    if provider_name not in _MEMORY_PROVIDERS:
-        raise ValueError(
-            f"Unknown memory provider: '{provider_name}'. "
-            f"Available: {list(_MEMORY_PROVIDERS.keys())}"
-        )
-
-    cls = _import_class(_MEMORY_PROVIDERS[provider_name])
-    provider = cls()
-    await provider.initialize(memory_config)
-    logger.info(f"Memory provider initialized: {provider_name}")
-    return provider
+    return await _create_provider("memory", config)
 
 
 def register_provider(
@@ -133,25 +110,16 @@ def register_provider(
     Example:
         register_provider("tts", "chatterbox", "src.providers.tts.chatterbox_provider.ChatterboxTTSProvider")
     """
-    registries = {
-        "stt": _STT_PROVIDERS,
-        "llm": _LLM_PROVIDERS,
-        "tts": _TTS_PROVIDERS,
-        "memory": _MEMORY_PROVIDERS,
-    }
-
-    if category not in registries:
+    if category not in _CATEGORIES:
         raise ValueError(f"Unknown provider category: {category}")
 
-    registries[category][name] = dotted_path
+    _CATEGORIES[category][0][name] = dotted_path
     logger.info(f"Registered {category} provider: {name} → {dotted_path}")
 
 
 def list_providers() -> dict[str, list[str]]:
     """List all registered providers by category."""
     return {
-        "stt": list(_STT_PROVIDERS.keys()),
-        "llm": list(_LLM_PROVIDERS.keys()),
-        "tts": list(_TTS_PROVIDERS.keys()),
-        "memory": list(_MEMORY_PROVIDERS.keys()),
+        category: list(registry.keys())
+        for category, (registry, _default) in _CATEGORIES.items()
     }

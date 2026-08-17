@@ -49,7 +49,6 @@ class ActorState:
 
     # ─── Emotional State ───
     current_emotion: str = "neutral"
-    emotion_intensity: float = 0.5  # 0.0 - 1.0
 
     # ─── Conversation ───
     conversation_history: list[ConversationTurn] = field(default_factory=list)
@@ -59,11 +58,6 @@ class ActorState:
     history_window_start: int = 0
     last_interaction_time: float = 0.0
     is_speaking: bool = False
-    is_listening: bool = False
-
-    # ─── Proactive Behavior ───
-    silence_start_time: float | None = None
-    last_proactive_time: float = 0.0
 
     @property
     def hours_elapsed(self) -> float:
@@ -136,7 +130,6 @@ class ActorState:
         )
         self.conversation_history.append(turn)
         self.last_interaction_time = time.time()
-        self.silence_start_time = None  # Reset silence timer on any interaction
         return turn
 
     def start_performance(self) -> None:

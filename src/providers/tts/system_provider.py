@@ -15,7 +15,6 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
-from typing import AsyncIterator
 
 from src.core.interfaces.tts import TTSProvider, TTSResult, VoiceProfile
 
@@ -130,43 +129,6 @@ class SystemTTSProvider(TTSProvider):
             sample_rate=22050,
             generation_time_ms=generation_time,
         )
-
-    async def stream_synthesize(
-        self,
-        text: str,
-        voice_profile: VoiceProfile | None = None,
-        emotion: str | None = None,
-    ) -> AsyncIterator[bytes]:
-        """System TTS doesn't support streaming — returns full audio."""
-        result = await self.synthesize(text, voice_profile, emotion)
-        yield result.audio_data
-
-    async def speak_directly(
-        self,
-        text: str,
-        voice_profile: VoiceProfile | None = None,
-        emotion: str | None = None,
-    ) -> None:
-        """
-        Speak directly through speakers (bypasses audio file generation).
-        This is the fastest path for the system provider.
-        """
-        voice = self.default_voice
-        rate = self.default_rate
-
-        if voice_profile:
-            age_stage = voice_profile.age_stage
-            voice = _MACOS_VOICES.get("en", {}).get(age_stage, self.default_voice)
-            rate = int(self.default_rate * voice_profile.speed)
-
-        cmd = ["say", "-v", voice, "-r", str(rate), text]
-
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        await process.wait()
 
     async def shutdown(self) -> None:
         pass

@@ -53,22 +53,6 @@ class STTProvider(ABC):
         """
         pass
 
-    @abstractmethod
-    async def stream_transcribe(
-        self, audio_stream: AsyncIterator[bytes], sample_rate: int = 16000
-    ) -> AsyncIterator[TranscriptionResult]:
-        """
-        Stream transcription for real-time use.
-
-        Yields partial results as speech is detected.
-        """
-        pass
-
-    @abstractmethod
-    def get_supported_languages(self) -> list[str]:
-        """Return list of supported language codes."""
-        pass
-
     async def shutdown(self) -> None:
         """Clean up resources."""
         pass

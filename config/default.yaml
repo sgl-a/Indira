@@ -140,11 +140,3 @@ audio:
   # Output
   output_device: null  # null = system default
   output_sample_rate: 22050
-
-# ─── Proactive Conversation ───
-proactive:
-  enabled: true
-  # Seconds of silence before AI might initiate
-  silence_threshold_seconds: 30
-  # Probability of initiating after silence threshold
-  initiation_probability: 0.3

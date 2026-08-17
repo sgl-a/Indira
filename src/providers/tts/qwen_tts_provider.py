@@ -16,10 +16,7 @@ Features:
 import asyncio
 import io
 import logging
-import tempfile
 import time
-from pathlib import Path
-from typing import AsyncGenerator, AsyncIterator
 
 import numpy as np
 import soundfile as sf
@@ -42,18 +39,6 @@ _LANG_MAP = {
     "ko": "korean",
     "zh": "chinese",
     "ru": "russian",
-}
-
-# Age → voice design instructions for Qwen3-TTS (Argentine Spanish female)
-_AGE_VOICE_DESIGNS = {
-    "10-15": "A young girl around 12 years old, clear high-pitched voice, energetic, speaking quickly",
-    "15-20": "A teenage girl around 17 years old, slightly deeper voice, casual and relaxed tone",
-    "20-25": "A young woman around 22 years old, firm natural voice, confident",
-    "25-30": "A woman around 28 years old, warm confident conversational voice",
-    "30-40": "A woman around 35 years old, mature calm deliberate voice",
-    "40-50": "A woman around 45 years old, deep measured voice with character",
-    "50-60": "A woman around 55 years old, rich warm reflective voice, unhurried pace",
-    "60-70": "An older woman around 65 years old, soft gentle wise voice, slow deliberate pace",
 }
 
 # Emotion tag → TTS instruction (maps LLM [emoción] output to Qwen3-TTS instruct)
@@ -233,53 +218,6 @@ class QwenTTSProvider(TTSProvider):
 
         return full_audio.flatten(), sample_rate
 
-    # pyrefly: ignore [bad-override]
-    async def stream_synthesize(
-        self,
-        text: str,
-        voice_profile: VoiceProfile | None = None,
-        emotion: str | None = None,
-    ) -> AsyncGenerator[bytes, None]:
-        """
-        Stream audio chunks.
-
-        Note: Falls back to generating full audio and yielding as one chunk.
-        True streaming via model.generate(stream=True) could be added later.
-        """
-        result = await self.synthesize(text, voice_profile, emotion)
-        yield result.audio_data
-
-    async def speak_directly(
-        self,
-        text: str,
-        voice_profile: VoiceProfile | None = None,
-        emotion: str | None = None,
-    ) -> None:
-        """Generate audio and play directly through speakers."""
-        result = await self.synthesize(text, voice_profile, emotion)
-
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-            f.write(result.audio_data)
-            temp_path = f.name
-
-        try:
-            process = await asyncio.create_subprocess_exec(
-                "afplay", temp_path,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            await process.wait()
-        finally:
-            Path(temp_path).unlink(missing_ok=True)
-
-    def _get_voice_description(self, voice_profile: VoiceProfile | None) -> str:
-        """Get voice design description based on age stage."""
-        if voice_profile and voice_profile.age_stage:
-            description = _AGE_VOICE_DESIGNS.get(voice_profile.age_stage)
-            if description:
-                return description
-        return _AGE_VOICE_DESIGNS.get("20-25", "A young woman, natural conversational voice")
-
     def _get_emotion_instruction(self, emotion: str | None) -> str:
         """Map LLM emotion tag to TTS instruction."""
         if not emotion:
@@ -297,16 +235,6 @@ class QwenTTSProvider(TTSProvider):
 
         logger.debug(f"Unknown emotion tag for TTS: '{emotion}', using neutral")
         return "Speak naturally and conversationally"
-
-    def _build_instruct(self, voice_profile: VoiceProfile | None, emotion: str | None) -> str:
-        """Build instruct string for Qwen3-TTS.
-
-        Only passes emotion instructions — NOT voice design descriptions.
-        Voice Design in instruct causes a new random voice per call,
-        which breaks consistency across streaming chunks.
-        Voice aging will be handled separately via speaker embeddings.
-        """
-        return self._get_emotion_instruction(emotion)
 
     async def shutdown(self) -> None:
         """Release model."""

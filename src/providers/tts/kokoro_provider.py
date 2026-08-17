@@ -12,12 +12,9 @@ Models: models/kokoro/kokoro-v1.0.onnx + voices-v1.0.bin
 
 import asyncio
 import logging
-import tempfile
 import time
 from pathlib import Path
-from typing import AsyncIterator
 
-import numpy as np
 import soundfile as sf
 
 from src.core.interfaces.tts import TTSProvider, TTSResult, VoiceProfile
@@ -172,46 +169,6 @@ class KokoroTTSProvider(TTSProvider):
             duration_seconds=duration,
             generation_time_ms=generation_time,
         )
-
-    async def stream_synthesize(
-        self,
-        text: str,
-        voice_profile: VoiceProfile | None = None,
-        emotion: str | None = None,
-    ) -> AsyncIterator[bytes]:
-        """Stream audio chunks as they're generated."""
-        voice = self._select_voice(voice_profile)
-
-        async for samples, sr in self.kokoro.create_stream(
-            text, voice=voice, speed=self.speed, lang=self.default_lang
-        ):
-            import io
-            buf = io.BytesIO()
-            sf.write(buf, samples, sr, format="WAV")
-            yield buf.getvalue()
-
-    async def speak_directly(
-        self,
-        text: str,
-        voice_profile: VoiceProfile | None = None,
-        emotion: str | None = None,
-    ) -> None:
-        """Generate audio and play directly through speakers."""
-        result = await self.synthesize(text, voice_profile, emotion)
-
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-            f.write(result.audio_data)
-            temp_path = f.name
-
-        try:
-            process = await asyncio.create_subprocess_exec(
-                "afplay", temp_path,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            await process.wait()
-        finally:
-            Path(temp_path).unlink(missing_ok=True)
 
     def _select_voice(self, voice_profile: VoiceProfile | None) -> str:
         """Select voice based on age stage or use default."""

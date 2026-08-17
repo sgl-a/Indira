@@ -30,6 +30,63 @@ _EMOJI = re.compile(
 )
 
 
+class EmotionTagFilter:
+    """
+    Incrementally strips the leading [emoción] tag from a token stream.
+
+    The end-of-stream parse (ollama_provider._parse_emotion) is the
+    authority for state/history; this is its real-time counterpart for the
+    live display and streaming TTS, which need clean text and the emotion
+    BEFORE the response is complete. Tags can arrive split across chunk
+    boundaries, so early chunks are held back until the tag either closes
+    or provably isn't coming.
+    """
+
+    # Give up waiting for "]" past this much text — it's dialogue, not a tag
+    _MAX_TAG_LEN = 50
+    # If the text doesn't start with "[" after this many chars, no tag is coming
+    _MAX_PLAIN_HOLD = 5
+
+    def __init__(self) -> None:
+        self._buf = ""
+        self._resolved = False
+        # Set once a leading tag is parsed; stays None if no tag arrives
+        self.emotion: str | None = None
+
+    def feed(self, chunk: str) -> str:
+        """Feed a raw chunk, get back the displayable text (may be "")."""
+        if self._resolved:
+            return chunk
+        self._buf += chunk
+        bracket_end = self._buf.find("]")
+        if bracket_end >= 0 and self._buf.lstrip().startswith("["):
+            bracket_start = self._buf.find("[")
+            self.emotion = self._buf[bracket_start + 1:bracket_end].strip()
+            self._resolved = True
+            out = self._buf[bracket_end + 1:].lstrip()
+            self._buf = ""
+            return out
+        if len(self._buf) > self._MAX_TAG_LEN or (
+            not self._buf.lstrip().startswith("[") and len(self._buf) > self._MAX_PLAIN_HOLD
+        ):
+            self._resolved = True
+            out, self._buf = self._buf, ""
+            return out
+        return ""
+
+    def flush(self) -> str:
+        """
+        Release anything still held at end of stream.
+
+        Without this, short untagged replies (e.g. "Sí.") that never trip
+        the resolution heuristics would be silently dropped from the
+        display and streaming TTS.
+        """
+        out, self._buf = self._buf, ""
+        self._resolved = True
+        return out
+
+
 def sanitize_for_tts(text: str) -> str:
     """
     Return only the speakable words of `text` for TTS synthesis.

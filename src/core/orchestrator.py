@@ -6,9 +6,8 @@ Orchestrator.
 The central coordinator that connects all providers and manages
 the AI Actor's conversation loop. Handles:
 - Audio input → STT → LLM → TTS → Audio output
-- Memory storage and retrieval
+- Memory storage, retrieval, and background consolidation
 - Age progression
-- Proactive conversation initiation
 """
 
 import asyncio
@@ -20,8 +19,9 @@ import uuid
 from pathlib import Path
 from typing import Any, AsyncIterator
 
+from src.core.audio_output import WavPlayback
 from src.core.logging_utils import defer_console_logs, flush_console_logs
-from src.core.text_filters import sanitize_for_tts
+from src.core.text_filters import EmotionTagFilter, sanitize_for_tts
 from src.core.state import ActorState, ConversationTurn, PerformancePhase
 from src.core.age_engine import AgeEngine
 from src.core.registry import (
@@ -59,7 +59,6 @@ class Orchestrator:
 
         # Control
         self._running = False
-        self._proactive_task: asyncio.Task | None = None
 
         # Performance-state persistence (crash recovery for the 72h run)
         system_config = config.get("system", {})
@@ -193,34 +192,50 @@ class Orchestrator:
             logger.warning(f"Could not persist performance state: {e}")
 
     async def setup(self) -> None:
-        """Initialize all providers."""
+        """Initialize all providers concurrently.
+
+        Startup time = the slowest provider (the TTS model load), not the
+        sum: each provider's heavy work runs in its own executor thread, so
+        the four initializations genuinely overlap.
+        """
         logger.info("🎭 Initializing AI Actor system...")
+        start = time.time()
 
-        # Initialize providers in parallel
-        self.llm = await create_llm_provider(self.config)
-        self.tts = await create_tts_provider(self.config)
-        self.memory = await create_memory_provider(self.config)
+        llm, tts, memory, stt = await asyncio.gather(
+            create_llm_provider(self.config),
+            create_tts_provider(self.config),
+            create_memory_provider(self.config),
+            create_stt_provider(self.config),
+            return_exceptions=True,
+        )
 
-        # STT is optional for text-only mode
-        try:
-            self.stt = await create_stt_provider(self.config)
-        except Exception as e:
-            logger.warning(f"STT initialization failed: {e}. Running in text-only mode.")
+        # STT is optional — text mode runs without a mic stack
+        if isinstance(stt, Exception):
+            logger.warning(f"STT initialization failed: {stt}. Running in text-only mode.")
+            stt = None
+        self.stt = stt
+
+        # The rest are required. Assign whatever succeeded FIRST so
+        # shutdown() can clean up a partial initialization, then fail loudly.
+        self.llm = llm if not isinstance(llm, Exception) else None
+        self.tts = tts if not isinstance(tts, Exception) else None
+        self.memory = memory if not isinstance(memory, Exception) else None
+        for name, result in (("LLM", llm), ("TTS", tts), ("Memory", memory)):
+            if isinstance(result, Exception):
+                raise RuntimeError(f"{name} provider failed to initialize: {result}") from result
 
         # Background memory consolidation (turns dropped from the short-term
         # window get compressed into long-term memories while she's idle)
         if self._consolidation_enabled and self.llm and self.memory:
             self._consolidation_task = asyncio.create_task(self._consolidation_worker())
 
-        logger.info("✅ All providers initialized")
+        logger.info(f"✅ All providers initialized in {time.time() - start:.1f}s")
 
     async def shutdown(self) -> None:
         """Clean shutdown of all providers."""
         logger.info("Shutting down AI Actor system...")
         self._running = False
 
-        if self._proactive_task:
-            self._proactive_task.cancel()
         if self._consolidation_task:
             self._consolidation_task.cancel()
 
@@ -235,94 +250,29 @@ class Orchestrator:
 
     async def process_input(self, user_text: str, speaker_id: str | None = None) -> str:
         """
-        Process text input and generate a response.
+        Process text input and return the complete response text.
 
-        This is the core conversation loop:
-        1. Store user input
-        2. Retrieve relevant memories
-        3. Build context (personality + memories + history)
-        4. Generate response via LLM
-        5. Store significant memories
-        6. Synthesize speech (if TTS available)
-
-        Args:
-            user_text: What the user (actress) said
-            speaker_id: Optional speaker identifier
-
-        Returns:
-            The AI's spoken response text
+        Thin non-streaming wrapper: the single turn implementation lives in
+        process_input_streaming — this just consumes it and keeps the final
+        text (all state updates, memory, and maintenance happen there).
         """
-        if not self.llm:
-            raise RuntimeError("LLM provider not initialized")
-
-        # Update age progression
-        age_changed = self.age_engine.update_state(self.state)
-        if age_changed:
-            # Store age transition as milestone memory
-            await self._store_age_milestone()
-
-        # 1. Record user input
-        self._append_transcript(self.state.add_turn("user", user_text, speaker_id=speaker_id))
-
-        # 2. Retrieve relevant memories
-        memories_context = await self._build_memory_context(user_text)
-
-        # 3. Build system prompt (stable per age stage — Ollama KV-cache friendly)
-        system_prompt = self.age_engine.build_personality_prompt(self.state, self.config)
-
-        # 4. Get conversation history. (Safety-net trim only: the window is
-        # normally trimmed between turns by _post_turn_maintenance so the
-        # KV re-prefill happens while idle, not on a live turn.) Volatile
-        # context (memories) rides on the newest message only — the stored
-        # turn keeps the clean text so replay stays byte-stable for the cache
-        self._queue_dropped_turns(
-            self.state.trim_history(self._history_max_turns, self._history_trim_to)
-        )
-        messages = self.state.get_recent_messages()
-        messages[-1]["content"] = self._wrap_with_context(user_text, memories_context)
-
-        # 5. Generate response
-        llm_config = self.config.get("llm", {})
-        response = await self.llm.generate(
-            system_prompt=system_prompt,
-            messages=messages,
-            temperature=llm_config.get("temperature", 0.8),
-            max_tokens=llm_config.get("max_tokens", 512),
-        )
-
-        # 6. Update state with response
-        self._append_transcript(
-            self.state.add_turn("assistant", response.text, emotion=response.emotion)
-        )
-        if response.emotion:
-            self.state.current_emotion = response.emotion
-
-        # 7. Store in memory. With consolidation on, long-term memories are
-        # written when turns leave the short-term window, not per turn.
-        if not self._consolidation_enabled and response.should_store_memory:
-            await self._store_interaction(user_text, response)
-
-        # 8. Between-turns maintenance (trim + cache prewarm, runs in the gap)
-        self._post_turn_maintenance()
-
-        # Log performance
-        logger.debug(
-            f"💬 Response ({response.generation_time_ms:.0f}ms, "
-            f"{response.tokens_generated} tokens, "
-            f"emotion={response.emotion}): {response.text[:80]}..."
-        )
-
-        return response.text
+        response = None
+        async for chunk in self.process_input_streaming(user_text, speaker_id=speaker_id):
+            if isinstance(chunk, LLMResponse):
+                response = chunk
+        return response.text if response else ""
 
     async def process_input_streaming(
         self, user_text: str, speaker_id: str | None = None
     ) -> AsyncIterator[str | LLMResponse]:
         """
-        Process text input and stream the response word-by-word.
+        THE conversation turn: record input, retrieve memories, build the
+        prompt, stream the response, update state/memory, run maintenance.
 
         Yields str chunks as they arrive, then a final LLMResponse.
         The caller should display chunks in real-time, then use the
-        LLMResponse for metadata (emotion, timing, memory storage).
+        LLMResponse for metadata (emotion, timing).
+        (Non-streaming callers use the process_input wrapper.)
         """
         if not self.llm:
             raise RuntimeError("LLM provider not initialized")
@@ -352,30 +302,21 @@ class Orchestrator:
         messages = self.state.get_recent_messages()
         messages[-1]["content"] = self._wrap_with_context(user_text, memories_context)
 
-        # 5. Stream response
+        # 5. Stream response (part of the LLMProvider interface — providers
+        # without real token streaming inherit a generate() fallback)
         llm_config = self.config.get("llm", {})
         response = None
 
-        if hasattr(self.llm, "stream_generate_with_metadata"):
-            async for chunk in self.llm.stream_generate_with_metadata(
-                system_prompt=system_prompt,
-                messages=messages,
-                temperature=llm_config.get("temperature", 0.8),
-                max_tokens=llm_config.get("max_tokens", 512),
-            ):
-                if isinstance(chunk, LLMResponse):
-                    response = chunk
-                else:
-                    yield chunk
-        else:
-            # Fallback: non-streaming
-            response = await self.llm.generate(
-                system_prompt=system_prompt,
-                messages=messages,
-                temperature=llm_config.get("temperature", 0.8),
-                max_tokens=llm_config.get("max_tokens", 512),
-            )
-            yield response.text
+        async for chunk in self.llm.stream_generate_with_metadata(
+            system_prompt=system_prompt,
+            messages=messages,
+            temperature=llm_config.get("temperature", 0.8),
+            max_tokens=llm_config.get("max_tokens", 512),
+        ):
+            if isinstance(chunk, LLMResponse):
+                response = chunk
+            else:
+                yield chunk
 
         # 6. Post-streaming: update state and store memory
         if response:
@@ -386,48 +327,19 @@ class Orchestrator:
                 self.state.current_emotion = response.emotion
             # With consolidation on, long-term memories are written when
             # turns leave the short-term window, not per turn
-            if not self._consolidation_enabled and response.should_store_memory:
+            if not self._consolidation_enabled:
                 await self._store_interaction(user_text, response)
             # Between-turns maintenance (trim + cache prewarm, runs in the gap)
             self._post_turn_maintenance()
-
+            logger.debug(
+                f"💬 Response ({response.generation_time_ms:.0f}ms, "
+                f"{response.tokens_generated} tokens, "
+                f"emotion={response.emotion}): {response.text[:80]}..."
+            )
 
         # Yield final response for caller to use if needed
         if response:
             yield response
-
-    async def process_audio(self, audio_data: bytes, sample_rate: int = 16000) -> str | None:
-        """
-        Process audio input through STT → LLM → TTS pipeline.
-
-        Returns the response text, or None if no speech was detected.
-        """
-        if not self.stt:
-            raise RuntimeError("STT provider not initialized")
-
-        # 1. Transcribe audio
-        transcription = await self.stt.transcribe(audio_data, sample_rate)
-
-        if not transcription.text.strip():
-            return None
-
-        logger.info(f"🎤 Heard ({transcription.language}): {transcription.text}")
-
-        # 2. Process through conversation
-        response_text = await self.process_input(transcription.text)
-
-        # 3. Synthesize speech
-        if self.tts:
-            voice_profile = self._get_voice_profile()
-            tts_result = await self.tts.synthesize(
-                text=response_text,
-                voice_profile=voice_profile,
-                emotion=self.state.current_emotion,
-            )
-            logger.info(f"🔊 TTS generated ({tts_result.generation_time_ms:.0f}ms)")
-            # Audio playback would be handled by the output module
-
-        return response_text
 
     def _get_voice_profile(self) -> VoiceProfile:
         """Get the voice profile for the current age stage."""
@@ -489,17 +401,12 @@ class Orchestrator:
         if not self.memory:
             return
 
-        # Build a useful summary from both sides of the conversation.
-        # The LLM rarely sets memory_summary, so we build one ourselves.
-        if response.memory_summary:
-            summary = response.memory_summary
-        else:
-            # Include both what was said and what was responded —
-            # this is what makes semantic search actually work.
-            name = self.config.get("llm", {}).get("personality", {}).get("name", "Indira")
-            user_part = user_input[:150].strip()
-            response_part = response.text[:200].strip()
-            summary = f"Mamá dijo: {user_part}. {name} respondió: {response_part}"
+        # Include both what was said and what was responded —
+        # this is what makes semantic search actually work.
+        name = self.config.get("llm", {}).get("personality", {}).get("name", "Indira")
+        user_part = user_input[:150].strip()
+        response_part = response.text[:200].strip()
+        summary = f"Mamá dijo: {user_part}. {name} respondió: {response_part}"
 
         memory = Memory(
             id=str(uuid.uuid4()),
@@ -737,9 +644,7 @@ class Orchestrator:
         name = self.config.get("llm", {}).get("personality", {}).get("name", "Entity")
         use_streaming = self.config.get("llm", {}).get("streaming", True)
         tts_streaming = bool(
-            self.tts
-            and hasattr(self.tts, "speak_directly")
-            and self.config.get("tts", {}).get("streaming", False)
+            self.tts and self.config.get("tts", {}).get("streaming", False)
         )
         logger.debug(f"🔧 TTS streaming: {tts_streaming} | LLM streaming: {use_streaming}")
 
@@ -771,12 +676,12 @@ class Orchestrator:
             tts_sentence_buf = ""     # Accumulates clean text for TTS
             tts_queue = asyncio.Queue()  # Sentences ready for TTS
             tts_task = None           # Background task playing audio
-            stream_buffer = ""        # Buffer to strip [emotion] tag
-            tag_stripped = False
             tts_sentence_count = 0    # Sentences accumulated in buffer
             tts_chunk_size = self.config.get("tts", {}).get("chunk_sentences", 1)
             tts_metrics = []          # Accumulate TTS logs to print at end
-            current_streaming_emotion = self.state.current_emotion  # Fallback
+            # Live [emoción] tag stripping (the end-of-stream parse in the
+            # provider is the authority for state; this one feeds display+TTS)
+            tag_filter = EmotionTagFilter()
 
             async for chunk in self.process_input_streaming(user_input):
                 if isinstance(chunk, LLMResponse):
@@ -793,31 +698,15 @@ class Orchestrator:
                     )
                     header_printed = True
 
-                # Buffer initial chunks to strip [emotion] tag
-                if not tag_stripped:
-                    stream_buffer += chunk
-                    bracket_end = stream_buffer.find("]")
-                    if bracket_end >= 0 and stream_buffer.lstrip().startswith("["):
-                        bracket_start = stream_buffer.find("[")
-                        current_streaming_emotion = stream_buffer[bracket_start + 1:bracket_end].strip()
-                        clean = stream_buffer[bracket_end + 1:].lstrip()
-                        if clean:
-                            console.print(clean, end="", markup=False, highlight=False)
-                            tts_sentence_buf += clean
-                        tag_stripped = True
-                    elif len(stream_buffer) > 50 or (not stream_buffer.lstrip().startswith("[") and len(stream_buffer) > 5):
-                        console.print(stream_buffer, end="", markup=False, highlight=False)
-                        tts_sentence_buf += stream_buffer
-                        tag_stripped = True
-                else:
-                    # Print each chunk as it arrives.
+                clean = tag_filter.feed(chunk)
+                if clean:
                     # markup off: brackets in the line ("[risas]") are dialogue,
                     # not Rich tags — Rich would silently swallow them
-                    console.print(chunk, end="", markup=False, highlight=False)
-                    tts_sentence_buf += chunk
+                    console.print(clean, end="", markup=False, highlight=False)
+                    tts_sentence_buf += clean
 
                 # Check for sentence boundary → count and queue for TTS
-                if tts_streaming and tag_stripped and tts_sentence_buf.rstrip().endswith((".", "!", "?")):
+                if tts_streaming and tts_sentence_buf.rstrip().endswith((".", "!", "?")):
                     tts_sentence_count += 1
                     if tts_sentence_count >= tts_chunk_size:
                         # Sanitized: emojis/tags/actions derail the TTS
@@ -830,21 +719,29 @@ class Orchestrator:
                             # Start TTS consumer if not running
                             if tts_task is None or tts_task.done():
                                 voice_profile = self._get_voice_profile()
-                                emotion_for_tts = current_streaming_emotion
+                                emotion_for_tts = tag_filter.emotion or self.state.current_emotion
                                 tts_task = asyncio.create_task(
                                     self._tts_consumer(
                                         tts_queue, voice_profile, emotion_for_tts, tts_metrics
                                     )
                                 )
 
+            # Release any text still held by the tag filter — short untagged
+            # replies would otherwise never reach the console or TTS
+            tail = tag_filter.flush()
+            if tail:
+                console.print(tail, end="", markup=False, highlight=False)
+                tts_sentence_buf += tail
+
             # Flush remaining text to TTS (sanitized — see above)
             if tts_streaming and sanitize_for_tts(tts_sentence_buf):
                 await tts_queue.put(sanitize_for_tts(tts_sentence_buf))
                 if tts_task is None or tts_task.done():
                     voice_profile = self._get_voice_profile()
+                    emotion_for_tts = tag_filter.emotion or self.state.current_emotion
                     tts_task = asyncio.create_task(
                         self._tts_consumer(
-                            tts_queue, voice_profile, current_streaming_emotion, tts_metrics
+                            tts_queue, voice_profile, emotion_for_tts, tts_metrics
                         )
                     )
 
@@ -886,9 +783,7 @@ class Orchestrator:
             flush_console_logs()
 
     async def _speak_full(self, text_to_speak: str, console: Any) -> None:
-        """Synthesize a whole response at once and play it through afplay."""
-        import tempfile
-
+        """Synthesize a whole response at once and play it."""
         # Sanitized: emojis/tags/actions derail the TTS (CJK babble)
         text_to_speak = sanitize_for_tts(text_to_speak) if text_to_speak else ""
         if not (self.tts and text_to_speak):
@@ -906,19 +801,8 @@ class Orchestrator:
                 f"generated in {tts_result.generation_time_ms:.0f}ms "
                 f"(emotion: {emotion_for_tts or 'none'})[/dim]"
             )
-            # Play the already-synthesized audio
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-                f.write(tts_result.audio_data)
-                temp_path = f.name
-            try:
-                process = await asyncio.create_subprocess_exec(
-                    "afplay", temp_path,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                await process.wait()
-            finally:
-                Path(temp_path).unlink(missing_ok=True)
+            playback = await WavPlayback.start(tts_result.audio_data)
+            await playback.wait()
         except Exception as e:
             logger.error(f"TTS error: {e}")
             console.print(f"[dim]   🔇 TTS error: {e}[/dim]")
@@ -1194,15 +1078,10 @@ class Orchestrator:
 
         Overlaps synthesis and playback: generates next chunk while current plays.
         """
-        import tempfile
-        from pathlib import Path
-
         if not self.tts:
             return
 
-        play_process = None
-        temp_files = []
-
+        playback: WavPlayback | None = None
         try:
             while True:
                 sentence = await queue.get()
@@ -1224,29 +1103,20 @@ class Orchestrator:
                     logger.warning(f"TTS consumer error: {e}")
                     continue
 
-                # Wait for previous audio to finish
-                if play_process is not None:
-                    await play_process.wait()
-
-                # Start playing (non-blocking)
-                tf = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-                tf.write(result.audio_data)
-                tf.close()
-                temp_files.append(tf.name)
-
-                play_process = await asyncio.create_subprocess_exec(
-                    "afplay", tf.name,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
+                # Wait for the previous sentence to finish, then start this
+                # one non-blocking (each playback cleans up its own file)
+                if playback is not None:
+                    await playback.wait()
+                playback = await WavPlayback.start(result.audio_data)
 
             # Wait for last audio to finish
-            if play_process is not None:
-                await play_process.wait()
+            if playback is not None:
+                await playback.wait()
 
         finally:
-            for f in temp_files:
-                Path(f).unlink(missing_ok=True)
+            # Cancellation path: don't leak an in-flight playback's temp file
+            if playback is not None:
+                playback.cleanup()
 
     async def _handle_command(self, command: str, console: Any) -> None:
         """Handle special commands in text mode."""

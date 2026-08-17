@@ -79,32 +79,6 @@ class TTSProvider(ABC):
         """
         pass
 
-    @abstractmethod
-    async def stream_synthesize(
-        self,
-        text: str,
-        voice_profile: VoiceProfile | None = None,
-        emotion: str | None = None,
-    ) -> AsyncIterator[bytes]:
-        """
-        Stream audio chunks for lower latency.
-
-        Yields audio chunks as they are generated.
-        """
-        pass
-
-    async def clone_voice(
-        self, reference_audio_path: str, name: str
-    ) -> VoiceProfile:
-        """
-        Create a voice profile from reference audio.
-
-        Not all providers support this — default raises NotImplementedError.
-        """
-        raise NotImplementedError(
-            f"{self.__class__.__name__} does not support voice cloning"
-        )
-
     async def shutdown(self) -> None:
         """Clean up resources."""
         pass

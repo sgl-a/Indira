@@ -26,12 +26,6 @@ class LLMResponse:
     text: str
     # Emotional intent for TTS and avatar
     emotion: str | None = None
-    # Internal monologue (for logging/debugging, not spoken)
-    internal_thought: str | None = None
-    # Whether this interaction should be stored in long-term memory
-    should_store_memory: bool = True
-    # Summary of this interaction for memory storage
-    memory_summary: str | None = None
     # Raw generation metadata
     generation_time_ms: float = 0
     first_token_time_ms: float = 0  # Time to first token (streaming latency)
@@ -75,20 +69,27 @@ class LLMProvider(ABC):
         """
         pass
 
-    @abstractmethod
-    async def stream_generate(
+    async def stream_generate_with_metadata(
         self,
         system_prompt: str,
         messages: list[dict],
         temperature: float = 0.7,
         max_tokens: int = 512,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[str | LLMResponse]:
         """
-        Stream tokens for lower perceived latency.
+        Stream text chunks, then yield a final LLMResponse with metadata.
 
-        Yields text chunks as they are generated.
+        Default implementation falls back to non-streaming generate() —
+        providers with real token streaming should override this.
         """
-        pass
+        response = await self.generate(
+            system_prompt=system_prompt,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        yield response.text
+        yield response
 
     @abstractmethod
     async def get_model_info(self) -> dict:

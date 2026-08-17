@@ -15,10 +15,12 @@ Switch from SimpleMemoryProvider by setting config:
       provider: "chroma"
 """
 
+import asyncio
+import functools
 import logging
-import time
 import uuid
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from src.core.interfaces.memory import Memory, MemoryProvider
@@ -53,6 +55,17 @@ class ChromaMemoryProvider(MemoryProvider):
         self._collection_kwargs: dict = {}
         # Newest-first buffer of recent memories (see _RECENT_BUFFER_SIZE)
         self._recent: deque[Memory] = deque(maxlen=_RECENT_BUFFER_SIZE)
+        # Chroma's calls are synchronous (embedding HTTP request + HNSW
+        # search) — run them on this single worker thread so they never
+        # freeze the event loop (TTS playback, mic capture). One thread =
+        # all Chroma access serialized, no thread-safety questions.
+        self._executor: ThreadPoolExecutor | None = None
+
+    async def _run(self, fn, *args, **kwargs):
+        """Run a blocking Chroma call on the provider's worker thread."""
+        return await asyncio.get_event_loop().run_in_executor(
+            self._executor, functools.partial(fn, *args, **kwargs)
+        )
 
     async def initialize(self, config: dict) -> None:
         """Initialize ChromaDB client and collection."""
@@ -71,15 +84,6 @@ class ChromaMemoryProvider(MemoryProvider):
         self._persist_dir = memory_config.get("persist_directory", "data/memory")
         collection_name = memory_config.get("collection_name", "ai_actor_memories")
         self._embedding_model = memory_config.get("embedding_model", "default")
-
-        # Ensure persist directory exists
-        Path(self._persist_dir).mkdir(parents=True, exist_ok=True)
-
-        # Initialize persistent client
-        self.client = chromadb.PersistentClient(
-            path=self._persist_dir,
-            settings=Settings(anonymized_telemetry=False),
-        )
 
         # "default" = Chroma's built-in all-MiniLM-L6-v2 (English-centric —
         # weak for the Spanish memory strings). Anything else is treated as
@@ -100,7 +104,20 @@ class ChromaMemoryProvider(MemoryProvider):
                 model_name=self._embedding_model,
             )
 
-        self.collection = self.client.get_or_create_collection(**self._collection_kwargs)
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="chroma")
+
+        def _connect() -> int:
+            Path(self._persist_dir).mkdir(parents=True, exist_ok=True)
+            self.client = chromadb.PersistentClient(
+                path=self._persist_dir,
+                settings=Settings(anonymized_telemetry=False),
+            )
+            self.collection = self.client.get_or_create_collection(**self._collection_kwargs)
+            count = self.collection.count()
+            self._seed_recent_buffer()
+            return count
+
+        existing_count = await self._run(_connect)
 
         stored_model = (self.collection.metadata or {}).get("embedding_model", "default")
         if stored_model != self._embedding_model:
@@ -112,8 +129,6 @@ class ChromaMemoryProvider(MemoryProvider):
                 f"to a new name."
             )
 
-        existing_count = self.collection.count()
-        self._seed_recent_buffer()
         logger.info(
             f"ChromaDB initialized. Collection: {collection_name}, "
             f"Embedding: {self._embedding_model}, "
@@ -180,7 +195,8 @@ class ChromaMemoryProvider(MemoryProvider):
                 if isinstance(v, (str, int, float, bool)):
                     metadata[k] = v
 
-        self.collection.add(
+        await self._run(
+            self.collection.add,
             ids=[memory.id],
             documents=[memory.content],
             metadatas=[metadata],
@@ -203,7 +219,8 @@ class ChromaMemoryProvider(MemoryProvider):
         if not self.collection:
             raise RuntimeError("ChromaDB not initialized")
 
-        if self.collection.count() == 0:
+        total = await self._run(self.collection.count)
+        if total == 0:
             return []
 
         # Build where filter
@@ -221,9 +238,10 @@ class ChromaMemoryProvider(MemoryProvider):
 
         # Query ChromaDB
         try:
-            results = self.collection.query(
+            results = await self._run(
+                self.collection.query,
                 query_texts=[query],
-                n_results=min(limit, self.collection.count()),
+                n_results=min(limit, total),
                 where=where if where else None,
             )
         except Exception as e:
@@ -256,17 +274,21 @@ class ChromaMemoryProvider(MemoryProvider):
     async def count(self) -> int:
         if not self.collection:
             return 0
-        return self.collection.count()
+        return await self._run(self.collection.count)
 
     async def clear(self) -> None:
         """Clear all stored memories."""
         if not self.collection or not self.client:
             return
-            
+
         name = self.collection.name
-        try:
+
+        def _reset():
             self.client.delete_collection(name)
             self.collection = self.client.get_or_create_collection(**self._collection_kwargs)
+
+        try:
+            await self._run(_reset)
             self._recent.clear()
             logger.info(f"ChromaDB memory cleared. Collection {name} reset.")
         except Exception as e:
@@ -274,6 +296,8 @@ class ChromaMemoryProvider(MemoryProvider):
 
     async def shutdown(self) -> None:
         count = await self.count()
+        if self._executor:
+            self._executor.shutdown(wait=False)
         logger.info(
             f"ChromaDB shutting down. "
             f"Total memories: {count}, "

@@ -16,7 +16,6 @@ import asyncio
 import functools
 import logging
 import time
-from typing import AsyncIterator
 
 import numpy as np
 
@@ -126,40 +125,6 @@ class WhisperSTTProvider(STTProvider):
             language=language,
             is_final=True,
         )
-
-    async def stream_transcribe(
-        self, audio_stream: AsyncIterator[bytes], sample_rate: int = 16000
-    ) -> AsyncIterator[TranscriptionResult]:
-        """
-        Stream transcription by processing audio chunks.
-
-        Accumulates audio until a pause is detected, then transcribes.
-        """
-        buffer = bytearray()
-        # Process in chunks of ~2 seconds
-        chunk_size = sample_rate * 2 * 4  # 2 seconds * 4 bytes per float32 sample
-
-        async for chunk in audio_stream:
-            buffer.extend(chunk)
-
-            if len(buffer) >= chunk_size:
-                result = await self.transcribe(bytes(buffer), sample_rate)
-                buffer.clear()
-
-                if result.text:
-                    yield result
-
-        # Process remaining buffer
-        if buffer:
-            result = await self.transcribe(bytes(buffer), sample_rate)
-            if result.text:
-                yield result
-
-    def get_supported_languages(self) -> list[str]:
-        return [
-            "en", "es", "de", "fr", "it", "pt", "nl", "ja", "zh", "ko",
-            "ar", "hi", "ru", "pl", "tr", "vi", "th", "uk", "cs", "da",
-        ]
 
     async def shutdown(self) -> None:
         self._mlx_whisper = None
