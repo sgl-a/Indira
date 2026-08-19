@@ -577,7 +577,7 @@ flowchart TB
 
 ## Your Whiteboard vs My Proposal
 
-![Your original whiteboard diagram](/Users/gsan/.gemini/antigravity/brain/279bb017-15ee-4be0-a52a-1c67b4d04dcb/uploaded_media_1769977596496.jpg)
+*(The original whiteboard photo is not included in this repository.)*
 
 **Key additions in my proposal:**
 
