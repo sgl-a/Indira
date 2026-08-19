@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "AI Actor Installation - A multimodal AI theatrical performance system"
 readme = "README.md"
 requires-python = ">=3.9"
-license = {text = "MIT"}
+# license: intentionally undeclared for now — see the License section in README.md
 
 dependencies = [
     "pyyaml>=6.0",
@@ -16,12 +16,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-whisper = ["openai-whisper>=20231117"]
-tts = ["kokoro>=0.9"]
+whisper = ["mlx-whisper>=0.4"]   # STT — Apple Silicon native
+tts = ["mlx-audio>=0.4"]         # TTS — runs the Qwen3-TTS MLX models
 memory = [
-    "chromadb>=0.4",
-    "ollama>=0.4",  # client used by Chroma's OllamaEmbeddingFunction (memory.embedding_model)
+    "chromadb>=1.5",
+    "ollama>=0.6",  # client used by Chroma's OllamaEmbeddingFunction (memory.embedding_model)
 ]
+tools = ["gradio>=6.0"]          # scripts/chroma_explorer.py web UI
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",

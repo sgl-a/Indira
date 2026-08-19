@@ -1,14 +1,14 @@
-# 🎭 AI Actor Installation
+# Indira
 
-A multimodal AI theatrical performance system for a 72-hour durational installation where an artificial "being" ages from 10 to 70 in real-time, interacting with a live actress.
+**An artificial being who ages from 10 to 70 over 72 hours, in conversation with her mother.**
 
-## Overview
+Indira is a fully-local AI performance system built for a durational theatrical installation. Across a continuous 72-hour run she grows from a ten-year-old into a woman of seventy — speaking, remembering, and changing in real time alongside a live actress playing her mother. Everything runs on-device: no cloud calls, no network dependency, nothing that can fail because a venue's wifi dropped.
 
-The AI entity can act and interact with a live actress over 72 hours. It ages in real-time, evolving from childhood (10) to old age (70), while maintaining character, conveying emotion, and performing as a theatrical actor.
+Under the hood it is a modular pipeline — speech-to-text, an LLM brain, text-to-speech, an eight-stage aging engine, and a two-tier memory that consolidates conversations into first-person recollections as the details fade. Every component is swappable through configuration rather than code.
 
-> **Status (2026-06-30):** Working today = an **audio/text conversational actor** (STT → LLM → TTS, memory, aging personality). Vision (cameras), the visual **avatar/projection**, and proactive behavior are **designed but not yet built** — the year-end 2026 target is the full system. See status tags in [ARCHITECTURE.md](ARCHITECTURE.md) and [TODO.md](TODO.md).
+> **Status:** The conversational actor works today — voice in, voice out, with memory and real-time aging. Computer vision and the projected avatar are designed but not yet built. See [ARCHITECTURE.md](ARCHITECTURE.md) for implemented-versus-planned status on every component.
 
-### Architecture
+## Architecture
 
 The system follows a **provider pattern** — every component is swappable via configuration:
 
@@ -38,12 +38,14 @@ cd ai-actor-project
 python3.13 -m venv .venv
 source .venv/bin/activate
 
-# Install the project
-pip install -e .
+# Install with the providers the default config uses
+pip install -e ".[whisper,tts,memory,dev]"
 
-# (Optional) Install with extra providers
-pip install -e ".[whisper,tts,dev]"
+# Extras: whisper (mlx-whisper STT) · tts (mlx-audio, runs Qwen3-TTS)
+#         memory (ChromaDB) · tools (Gradio memory explorer) · dev (pytest)
 ```
+
+> **Note:** `pip install -e .` alone installs only the core runtime — no STT, no TTS, no vector memory. The default configuration needs the `whisper`, `tts`, and `memory` extras to start.
 
 ### 3. Start Ollama
 
@@ -59,14 +61,7 @@ pip install -e ".[whisper,tts,dev]"
 ### 4. Pull a Model
 
 ```bash
-# Production brain (17GB, 262K context, multimodal)
-ollama pull qwen3.5:27b
-
-# Fast dev/testing model (18GB, MoE — much faster responses)
-ollama pull qwen3:30b-a3b
-
-# Lightweight fallback (~5GB, good for quick iteration)
-ollama pull llama3.1:8b
+ollama pull <modelname>
 ```
 
 > **Note:** Model download is a one-time operation. After pulling, everything runs 100% locally — no internet required.
@@ -157,7 +152,7 @@ python3 -m src.main --list-providers
 ```
 STT: whisper
 LLM: ollama
-TTS: system, kokoro, qwen
+TTS: system, qwen
 MEMORY: chroma, simple
 ```
 
@@ -212,8 +207,8 @@ ai-actor-project/
 │   │   └── registry.py           ← Provider registry (config-driven, lazy imports)
 │   ├── providers/
 │   │   ├── llm/ollama_provider   ← Ollama API with emotion tag parsing
-│   │   ├── stt/whisper_provider  ← OpenAI Whisper (EN/ES auto-detect)
-│   │   ├── tts/kokoro_provider   ← Kokoro 82M ONNX (Ultra-fast local TTS)
+│   │   ├── stt/whisper_provider  ← mlx-whisper (Apple Silicon, Spanish)
+│   │   ├── tts/qwen_tts_provider ← Qwen3-TTS via MLX (default)
 │   │   ├── tts/system_provider   ← macOS 'say' fallback
 │   │   └── memory/               ← simple_provider (keyword) + chroma_provider (semantic)
 │   └── main.py                   ← CLI entry point
@@ -229,7 +224,8 @@ ai-actor-project/
 
 ```bash
 # Start / Stop
-ollama serve                   # Start in current terminal (Ctrl+C to stop)
+ollama serve                   # Start in current terminal (Ctrl+C to stop) (see below)
+./scripts/start_ollama.sh      # recommended to run with this instead
 pkill ollama                   # Stop from any terminal
 
 # Check if running
@@ -246,6 +242,19 @@ ollama rm <model>              # Remove a model (frees disk space)
 
 ## Documentation
 
-- [TODO.md](TODO.md) — Active development checklist
-- [REQUIREMENTS.md](REQUIREMENTS.md) — Full project requirements & open questions
-- [TECH_STACK.md](TECH_STACK.md) — Technology research & model comparison
+- [ARCHITECTURE.md](ARCHITECTURE.md) — System design, data flow, and implemented-vs-planned status
+- [TECH_STACK.md](TECH_STACK.md) — Technology choices, models under evaluation, and alternatives
+
+## License
+
+Not licensed yet — all rights reserved for the moment. The work is in progress and
+the piece it belongs to has not premiered, so I'd rather choose a license once both
+are settled than pick one I can't walk back.
+
+The code is public to be read, and I'm glad for it to be useful that way. If you want
+to run it, build on it, or use any part of it before a license lands, open an issue and
+ask — the answer is likely yes.
+
+Note that this repository ships **no model weights**. Ollama models, `mlx-whisper`, and
+Qwen3-TTS are pulled at setup and carry their own licenses; Gemma in particular is
+distributed under the Gemma Terms of Use rather than an OSI-approved license.

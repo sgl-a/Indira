@@ -85,7 +85,7 @@ llm:
 
 # ─── Text-to-Speech ───
 tts:
-  provider: "qwen"        # "qwen" (Qwen3-TTS, expressive) | "kokoro" (fast, basic) | "system" (macOS say)
+  provider: "qwen"        # "qwen" (Qwen3-TTS, expressive) | "system" (macOS say, fallback)
   model: "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit"
   voice: "serena"
   lang: "es"              # mapped internally to full name ("spanish", "english", etc.)

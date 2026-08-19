@@ -29,7 +29,6 @@ _LLM_PROVIDERS: dict[str, str] = {
 
 _TTS_PROVIDERS: dict[str, str] = {
     "system": "src.providers.tts.system_provider.SystemTTSProvider",
-    "kokoro": "src.providers.tts.kokoro_provider.KokoroTTSProvider",
     "qwen": "src.providers.tts.qwen_tts_provider.QwenTTSProvider",
 }
 

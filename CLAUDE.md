@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A multimodal, **fully-local** AI theatrical performance system. An artificial being ("Indira") ages from 10 to 70 over a 72-hour durational installation, conversing in real time with a live actress ("Ximena", her "mother"). Everything runs on-device (Ollama + MLX on Apple Silicon) — no cloud calls at runtime. Context: a Goethe-Institut–sponsored piece for a museum in Berlin, to be presented end of 2026.
+A multimodal, **fully-local** AI theatrical performance system. An artificial being ("Indira") ages from 10 to 70 over a 72-hour durational installation, conversing in real time with a live actress ("Ximena", her "mother") and plausible others. Everything runs on-device (Ollama + MLX on Apple Silicon) — no cloud calls at runtime. 
 
 The performance language is **Spanish (Rioplatense)**. Character identity, personality prompts, and stored memory strings are written in Spanish on purpose — this is a domain requirement, not an oversight. **Don't "fix" Spanish strings to English.**
 
