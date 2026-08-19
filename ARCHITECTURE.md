@@ -1,4 +1,4 @@
-# AI Actor — System Architecture
+# Indira — System Architecture
 
 > **Last updated**: 2026-08-19
 > **Status**: Living document — it holds both the **target design** and the **current implementation**, deliberately.

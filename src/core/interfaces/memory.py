@@ -4,7 +4,7 @@ from __future__ import annotations
 Memory Provider Interface.
 
 Any memory/vector DB implementation (ChromaDB, LanceDB, etc.) must implement this.
-Handles short-term, long-term, and emotional memory for the AI Actor.
+Handles short-term, long-term, and emotional memory for the Indira.
 """
 
 from abc import ABC, abstractmethod

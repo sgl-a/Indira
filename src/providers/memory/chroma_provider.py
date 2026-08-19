@@ -82,7 +82,7 @@ class ChromaMemoryProvider(MemoryProvider):
         # (accept a full config dict too, for direct/test construction)
         memory_config = config.get("memory", config)
         self._persist_dir = memory_config.get("persist_directory", "data/memory")
-        collection_name = memory_config.get("collection_name", "ai_actor_memories")
+        collection_name = memory_config.get("collection_name", "indira_memories")
         self._embedding_model = memory_config.get("embedding_model", "default")
 
         # "default" = Chroma's built-in all-MiniLM-L6-v2 (English-centric —

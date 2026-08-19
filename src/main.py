@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 """
-AI Actor — Main Entry Point.
+Indira — Main Entry Point.
 
-Starts the AI Actor system in either text mode or full audio mode.
+Starts the Indira system in either text mode or full audio mode.
 """
 
 import argparse
@@ -37,7 +37,7 @@ def setup_logging(level: str = "INFO") -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="🎭 AI Actor — Theatrical AI Performance System",
+        description="🎭 Indira — Theatrical AI Performance System",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -47,9 +47,9 @@ Examples:
   python -m src.main --list-providers           # Show available providers
 
 Environment Variables:
-  AI_ACTOR__LLM__MODEL=qwen2.5:32b    # Override LLM model
-  AI_ACTOR__STT__MODEL=large-v3       # Override STT model
-  AI_ACTOR_ENV=development            # Load development.yaml overrides
+  INDIRA__LLM__MODEL=qwen2.5:32b    # Override LLM model
+  INDIRA__STT__MODEL=large-v3       # Override STT model
+  INDIRA_ENV=development            # Load development.yaml overrides
         """,
     )
 
@@ -103,7 +103,7 @@ async def run(args: argparse.Namespace) -> None:
 
     # Show startup banner
     console.print(Panel.fit(
-        "[bold magenta]🎭 AI Actor[/bold magenta]\n"
+        "[bold magenta]🎭 Indira[/bold magenta]\n"
         f"[dim]Mode: {args.mode} | "
         f"LLM: {config.get('llm', {}).get('model', '?')} | "
         f"TTS: {config.get('tts', {}).get('provider', '?')}[/dim]",

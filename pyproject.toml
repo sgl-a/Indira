@@ -1,7 +1,7 @@
 [project]
-name = "ai-actor"
+name = "indira"
 version = "0.1.0"
-description = "AI Actor Installation - A multimodal AI theatrical performance system"
+description = "A fully-local AI performance system: an artificial being who ages from 10 to 70 over a 72-hour durational installation"
 readme = "README.md"
 requires-python = ">=3.9"
 # license: intentionally undeclared for now — see the License section in README.md
@@ -30,7 +30,7 @@ dev = [
 ]
 
 [project.scripts]
-ai-actor = "src.main:main"
+indira = "src.main:main"
 
 [build-system]
 requires = ["setuptools>=64.0"]

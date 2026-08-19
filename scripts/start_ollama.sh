@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Ollama server for the AI Actor — explicit env vars, identical for every
+# Ollama server for Indira — explicit env vars, identical for every
 # machine. Use this instead of the desktop app (whose launchctl-based config
 # silently resets on reboot).
 #

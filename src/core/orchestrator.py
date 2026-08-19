@@ -4,7 +4,7 @@ from __future__ import annotations
 Orchestrator.
 
 The central coordinator that connects all providers and manages
-the AI Actor's conversation loop. Handles:
+the Indira's conversation loop. Handles:
 - Audio input → STT → LLM → TTS → Audio output
 - Memory storage, retrieval, and background consolidation
 - Age progression
@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 
 class Orchestrator:
     """
-    Main coordinator for the AI Actor system.
+    Main coordinator for the Indira system.
 
     Manages the perception → cognition → output pipeline
     and handles all inter-component communication.
@@ -198,7 +198,7 @@ class Orchestrator:
         sum: each provider's heavy work runs in its own executor thread, so
         the four initializations genuinely overlap.
         """
-        logger.info("🎭 Initializing AI Actor system...")
+        logger.info("🎭 Initializing Indira system...")
         start = time.time()
 
         llm, tts, memory, stt = await asyncio.gather(
@@ -233,7 +233,7 @@ class Orchestrator:
 
     async def shutdown(self) -> None:
         """Clean shutdown of all providers."""
-        logger.info("Shutting down AI Actor system...")
+        logger.info("Shutting down Indira system...")
         self._running = False
 
         if self._consolidation_task:
@@ -246,7 +246,7 @@ class Orchestrator:
                 except Exception as e:
                     logger.error(f"Error shutting down {provider.__class__.__name__}: {e}")
 
-        logger.info("👋 AI Actor system shut down")
+        logger.info("👋 Indira system shut down")
 
     async def process_input(self, user_text: str, speaker_id: str | None = None) -> str:
         """
@@ -820,7 +820,7 @@ class Orchestrator:
         console = Console()
 
         console.print(Panel.fit(
-            "[bold magenta]🎭 AI Actor — Text Mode[/bold magenta]\n"
+            "[bold magenta]🎭 Indira — Text Mode[/bold magenta]\n"
             "[dim]Type your messages. Commands: /age, /status, /memory, /lobotomy, /quit[/dim]",
             border_style="magenta",
         ))
@@ -891,7 +891,7 @@ class Orchestrator:
         preroll_ms = vad_config.get("preroll_ms", 300)
 
         console.print(Panel.fit(
-            "[bold magenta]🎭 AI Actor — Voice Mode[/bold magenta]\n"
+            "[bold magenta]🎭 Indira — Voice Mode[/bold magenta]\n"
             "[dim]Speak into your microphone. Press Ctrl+C to quit.[/dim]\n"
             f"[dim]VAD threshold: {energy_threshold} | Silence: {silence_ms}ms[/dim]",
             border_style="magenta",

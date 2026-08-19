@@ -306,7 +306,7 @@ async def benchmark_tts(providers_list: list[str], config: dict) -> None:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="🎭 AI Actor Benchmark Tool")
+    parser = argparse.ArgumentParser(description="🎭 Indira Benchmark Tool")
     subparsers = parser.add_subparsers(dest="component")
 
     # LLM benchmark

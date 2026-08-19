@@ -32,7 +32,7 @@ Microphone → [STT Provider] → [LLM Provider] → [TTS Provider] → Speaker
 ### 2. Install Dependencies
 
 ```bash
-cd ai-actor-project
+cd indira
 
 # Create virtual environment with Python 3.13
 python3.13 -m venv .venv
@@ -66,7 +66,7 @@ ollama pull <modelname>
 
 > **Note:** Model download is a one-time operation. After pulling, everything runs 100% locally — no internet required.
 
-### 5. Run the AI Actor
+### 5. Run Indira
 
 ```bash
 source .venv/bin/activate
@@ -107,12 +107,12 @@ python3 -m src.main --env development
 python3 -m src.main --fresh --log-level DEBUG
 
 # One-off config overrides via env vars (double underscore = section nesting)
-AI_ACTOR__LLM__MODEL=qwen3.5:9b python3 -m src.main
-AI_ACTOR__MEMORY__CONSOLIDATION__ENABLED=false python3 -m src.main
-AI_ACTOR_ENV=development python3 -m src.main            # same as --env development
+INDIRA__LLM__MODEL=qwen3.5:9b python3 -m src.main
+INDIRA__MEMORY__CONSOLIDATION__ENABLED=false python3 -m src.main
+INDIRA_ENV=development python3 -m src.main            # same as --env development
 ```
 
-Override precedence: `config/default.yaml` → `config/<env>.yaml` → `AI_ACTOR__*` env vars.
+Override precedence: `config/default.yaml` → `config/<env>.yaml` → `INDIRA__*` env vars.
 
 ## Text Mode Commands
 
@@ -140,7 +140,7 @@ llm:
 ### Via Environment Variable
 
 ```bash
-AI_ACTOR__LLM__MODEL=qwen3:30b-a3b python3 -m src.main
+INDIRA__LLM__MODEL=qwen3:30b-a3b python3 -m src.main
 ```
 
 ### Available Providers
@@ -183,7 +183,7 @@ python3 scripts/chroma_explorer.py
 python3 scripts/chroma_explorer.py --cli
 
 # Specify a custom database directory, collection, or port
-python3 scripts/chroma_explorer.py --dir data/memory --collection ai_actor_memories --port 7860
+python3 scripts/chroma_explorer.py --dir data/memory --collection indira_memories --port 7860
 ```
 
 The Web UI is available at `http://127.0.0.1:7860/` by default and allows you to:
@@ -195,7 +195,7 @@ The Web UI is available at `http://127.0.0.1:7860/` by default and allows you to
 ## Project Structure
 
 ```
-ai-actor-project/
+indira/
 ├── config/default.yaml           ← All model & behavior configuration
 ├── src/
 │   ├── core/
@@ -238,7 +238,7 @@ ollama pull <model>            # Download a model
 ollama rm <model>              # Remove a model (frees disk space)
 ```
 
-> **RAM note:** Ollama loads model weights into memory (~5-20GB depending on model). While the AI Actor runs, the LLM stays pinned (`llm.keep_alive: -1` — no cold starts after silences) and is unloaded on `/quit`; the embedding model self-unloads after ~5 min. Use `ollama ps` to see what's loaded, `ollama stop <model>` to free RAM manually after a crash.
+> **RAM note:** Ollama loads model weights into memory (~5-20GB depending on model). While Indira runs, the LLM stays pinned (`llm.keep_alive: -1` — no cold starts after silences) and is unloaded on `/quit`; the embedding model self-unloads after ~5 min. Use `ollama ps` to see what's loaded, `ollama stop <model>` to free RAM manually after a crash.
 
 ## Documentation
 

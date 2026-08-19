@@ -3,7 +3,7 @@ from __future__ import annotations
 """
 Age Engine.
 
-Manages the AI Actor's aging progression over 72 hours.
+Manages the Indira's aging progression over 72 hours.
 Determines current age stage and loads age-specific personality traits,
 voice profiles, and vocabulary constraints.
 """

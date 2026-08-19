@@ -1,5 +1,5 @@
 # Development overrides — load with: python -m src.main --env development
-# (or AI_ACTOR_ENV=development)
+# (or INDIRA_ENV=development)
 
 memory:
   # Tiny short-term window so memory consolidation fires after ~5 exchanges

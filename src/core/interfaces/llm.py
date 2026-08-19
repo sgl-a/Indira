@@ -4,7 +4,7 @@ from __future__ import annotations
 Language Model Provider Interface.
 
 Any LLM implementation (Ollama, MLX, llama.cpp, etc.) must implement this interface.
-The LLM serves as the "brain" of the AI Actor — generating dialogue,
+The LLM serves as the "brain" of the Indira — generating dialogue,
 expressing emotion, and staying in character.
 """
 

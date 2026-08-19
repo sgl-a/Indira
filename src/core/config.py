@@ -46,7 +46,7 @@ def load_config(
 
     # Merge environment overrides
     if environment is None:
-        environment = os.environ.get("AI_ACTOR_ENV", None)
+        environment = os.environ.get("INDIRA_ENV", None)
 
     if environment:
         env_path = config_dir / f"{environment}.yaml"
@@ -84,10 +84,10 @@ def _apply_env_overrides(config: dict) -> dict:
     """
     Apply environment variable overrides.
 
-    Format: AI_ACTOR__{SECTION}__{KEY}=value
-    Example: AI_ACTOR__LLM__MODEL=qwen2.5:32b
+    Format: INDIRA__{SECTION}__{KEY}=value
+    Example: INDIRA__LLM__MODEL=qwen2.5:32b
     """
-    prefix = "AI_ACTOR__"
+    prefix = "INDIRA__"
     for key, value in os.environ.items():
         if key.startswith(prefix):
             parts = key[len(prefix) :].lower().split("__")

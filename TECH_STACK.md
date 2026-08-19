@@ -24,7 +24,7 @@
 
 Four constraints narrow the field at every layer. They are settled even though the models are not:
 
-**Fully local.** No cloud calls at runtime. The piece runs 72 continuous hours in a museum; network dependence is an unacceptable failure mode. This rules out every hosted API regardless of quality.
+**Fully local.** No cloud calls at runtime. The piece runs 72 continuous hours in a public installation space; network dependence is an unacceptable failure mode. This rules out every hosted API regardless of quality.
 
 **Apple Silicon.** The target machine is an M4 Pro with 48 GB unified memory. Preference goes to MLX-native and Metal-accelerated implementations.
 
@@ -66,7 +66,7 @@ Models listed here are **what is loaded for testing right now**, not settled cho
 
 `sounddevice` at 16 kHz mono, with an in-house energy-gate VAD (`energy_threshold 0.03`, `silence_duration_ms 800`, `preroll_ms 300`).
 
-The VAD is deliberately naive. **Silero VAD** is the upgrade path if museum acoustics prove difficult — it is far more robust to ambient noise and crowd murmur, at the cost of a small model load and a few milliseconds per frame. Energy gating has been sufficient in testing, and the pre-roll window solves the one problem it reliably had (clipping soft first syllables).
+The VAD is deliberately naive. **Silero VAD** is the upgrade path if the venue's acoustics prove difficult — it is far more robust to ambient noise and crowd murmur, at the cost of a small model load and a few milliseconds per frame. Energy gating has been sufficient in testing, and the pre-roll window solves the one problem it reliably had (clipping soft first syllables).
 
 ### Speech-to-text ✅ — `mlx-whisper`
 
@@ -166,7 +166,7 @@ Switching costs more here than elsewhere in the stack, which is a reason to be d
 
 ### Vector store ✅ — ChromaDB
 
-Persisted to `data/memory/`, collection `ai_actor_memories`, retrieval limit 5 per turn.
+Persisted to `data/memory/`, collection `indira_memories`, retrieval limit 5 per turn.
 
 | Option | Notes so far |
 |--------|--------------|
@@ -251,7 +251,7 @@ Estimated ~4 GB. Face references would live at `profiles/age_XX_YY/face_referenc
 | Component | Choice | Notes |
 |-----------|--------|-------|
 | Python | 3.13, `venv` | `pip install -e ".[whisper,tts,memory,dev]"` |
-| Config | PyYAML | Layered: `default.yaml` → `<env>.yaml` → `AI_ACTOR__*` env vars |
+| Config | PyYAML | Layered: `default.yaml` → `<env>.yaml` → `INDIRA__*` env vars |
 | HTTP | `httpx` | Async client for Ollama |
 | Audio I/O | `sounddevice`, `soundfile`, `numpy` | Capture and WAV handling |
 | Console | `rich` | Streaming display, tables, status lines |
@@ -294,8 +294,8 @@ llm:
 ```
 
 ```bash
-AI_ACTOR__LLM__MODEL=qwen3.5:27b python -m src.main
-AI_ACTOR_ENV=development python -m src.main
+INDIRA__LLM__MODEL=qwen3.5:27b python -m src.main
+INDIRA_ENV=development python -m src.main
 python -m src.main --list-providers
 ```
 

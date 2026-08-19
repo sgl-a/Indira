@@ -15,7 +15,7 @@ def load_config():
     config_path = project_root / "config" / "default.yaml"
     defaults = {
         "persist_dir": "data/memory",
-        "collection_name": "ai_actor_memories"
+        "collection_name": "indira_memories"
     }
     
     if config_path.exists():
@@ -24,7 +24,7 @@ def load_config():
                 config = yaml.safe_load(f)
                 memory_config = config.get("memory", {})
                 defaults["persist_dir"] = memory_config.get("persist_directory", "data/memory")
-                defaults["collection_name"] = memory_config.get("collection_name", "ai_actor_memories")
+                defaults["collection_name"] = memory_config.get("collection_name", "indira_memories")
         except Exception as e:
             print(f"Warning: Failed to load config/default.yaml: {e}. Using defaults.")
     
@@ -342,7 +342,7 @@ def run_web_ui(persist_dir, collection_name, port=7860):
         gr.Markdown(
             f"""
             # 🧠 ChromaDB Memory Explorer
-            Explore, search, and manage semantic memories stored in the AI Actor database.
+            Explore, search, and manage semantic memories stored in the Indira database.
             
             * **Database Path:** `{persist_dir}`
             * **Active Collection:** `{collection_name}`
@@ -494,7 +494,7 @@ def run_web_ui(persist_dir, collection_name, port=7860):
     demo.launch(server_name="127.0.0.1", server_port=port, share=False, theme=theme)
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="ChromaDB Memory Explorer for AI Actor Project")
+    parser = argparse.ArgumentParser(description="ChromaDB Memory Explorer for Indira")
     parser.add_argument("--cli", action="store_true", help="Run in command-line interface mode using Rich")
     parser.add_argument("--port", type=int, default=7860, help="Gradio web server port (default: 7860)")
     parser.add_argument("--dir", type=str, default=db_config["persist_dir"], help="Path to ChromaDB persist directory")

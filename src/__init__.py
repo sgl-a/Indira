@@ -1,1 +1,1 @@
-# AI Actor - Core Package
+# Indira - Core Package

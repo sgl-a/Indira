@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 """
-State management for the AI Actor system.
+State management for the Indira system.
 
 Tracks the current state of the entire system: age, emotion,
 conversation context, and performance timing.
@@ -34,7 +34,7 @@ class ConversationTurn:
 @dataclass
 class ActorState:
     """
-    Complete state of the AI Actor at any point in time.
+    Complete state of the Indira at any point in time.
 
     This is the single source of truth for the system's current state.
     """

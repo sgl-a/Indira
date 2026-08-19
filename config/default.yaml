@@ -1,9 +1,9 @@
-# AI Actor - Configuration (March 2026)
+# Indira — Configuration
 # Change providers and models here — no code changes needed.
 
 # ─── System ───
 system:
-  name: "AI Actor"
+  name: "Indira"
   log_level: "INFO"
   # Performance duration in hours
   performance_duration_hours: 72
@@ -104,7 +104,7 @@ tts:
 memory:
   provider: "chroma"
   persist_directory: "data/memory"
-  collection_name: "ai_actor_memories"
+  collection_name: "indira_memories"
   # Embedding model for semantic search, served by the local Ollama.
   #   "default"              = Chroma's built-in all-MiniLM-L6-v2 (English-centric, weak on Spanish)
   #   "qwen3-embedding:0.6b" = best sub-1GB multilingual (pull first: ollama pull qwen3-embedding:0.6b)

@@ -1,5 +1,5 @@
 """
-Core interfaces for the AI Actor system.
+Core interfaces for the Indira system.
 
 All providers must implement these abstract interfaces.
 This ensures any component can be swapped without changing the rest of the system.
