@@ -3,7 +3,7 @@ name = "indira"
 version = "0.1.0"
 description = "A fully-local AI performance system: an artificial being who ages from 10 to 70 over a 72-hour durational installation"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.13"
 # license: intentionally undeclared for now — see the License section in README.md
 
 dependencies = [

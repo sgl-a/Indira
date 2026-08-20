@@ -1,0 +1,57 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # Fast feedback on every push. The suite is hermetic — no Ollama, no model
+  # weights, no network — so it needs only the core runtime plus ChromaDB.
+  test:
+    name: pytest (linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install
+        run: pip install -e ".[memory,dev]"
+
+      - name: Run tests
+        run: pytest -q
+
+  # Verifies the real target platform: that the MLX extras actually resolve on
+  # Apple Silicon. This is the check that would have caught `whisper` declaring
+  # openai-whisper while the provider imports mlx_whisper — the static guard in
+  # tests/test_packaging.py catches the declaration, this catches the install.
+  install-macos:
+    name: install + pytest (apple silicon)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install with all runtime extras
+        run: pip install -e ".[whisper,tts,memory,dev]"
+
+      - name: Verify provider dependencies import
+        run: |
+          python - <<'PY'
+          import importlib
+          for module in ("mlx_whisper", "mlx_audio", "mlx.core", "chromadb", "ollama"):
+              importlib.import_module(module)
+              print(f"ok {module}")
+          PY
+
+      - name: Run tests
+        run: pytest -q
