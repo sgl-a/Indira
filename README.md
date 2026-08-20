@@ -1,5 +1,7 @@
 # Indira
 
+[![tests](https://github.com/sgl-a/Indira/actions/workflows/tests.yml/badge.svg)](https://github.com/sgl-a/Indira/actions/workflows/tests.yml)
+
 **An artificial being who ages from 10 to 70 over 72 hours, in conversation with her mother.**
 
 Indira is a fully-local AI performance system built for a durational theatrical installation. Across a continuous 72-hour run she grows from a ten-year-old into a woman of seventy — speaking, remembering, and changing in real time alongside a live actress playing her mother. Everything runs on-device: no cloud calls, no network dependency, nothing that can fail because a venue's wifi dropped.
