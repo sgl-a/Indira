@@ -8,8 +8,6 @@ Under the hood it is a modular pipeline — speech-to-text, an LLM brain, text-t
 
 > **Status:** The conversational actor works today — voice in, voice out, with memory and real-time aging. Computer vision and the projected avatar are designed but not yet built. See [ARCHITECTURE.md](ARCHITECTURE.md) for implemented-versus-planned status on every component.
 
-```
-
 ## Quick Start
 
 ### 1. Prerequisites
