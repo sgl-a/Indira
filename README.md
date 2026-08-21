@@ -2,11 +2,9 @@
 
 [![tests](https://github.com/sgl-a/Indira/actions/workflows/tests.yml/badge.svg)](https://github.com/sgl-a/Indira/actions/workflows/tests.yml)
 
-**An artificial being who ages from 10 to 70 over 72 hours, in conversation with her mother.**
+Indira is a fully-local AI performance system built for a durational theatrical installation. Across a continuous 72-hour run it grows from a ten-year-old to seventy — speaking, remembering, and changing in real time alongside a live actress playing her mother. Everything runs on-device: no cloud calls, no network dependency.
 
-Indira is a fully-local AI performance system built for a durational theatrical installation. Across a continuous 72-hour run she grows from a ten-year-old into a woman of seventy — speaking, remembering, and changing in real time alongside a live actress playing her mother. Everything runs on-device: no cloud calls, no network dependency, nothing that can fail because a venue's wifi dropped.
-
-Under the hood it is a modular pipeline — speech-to-text, an LLM brain, text-to-speech, an eight-stage aging engine, and a two-tier memory that consolidates conversations into first-person recollections as the details fade. Every component is swappable through configuration rather than code.
+Under the hood it is a modular pipeline — speech-to-text, an LLM brain, text-to-speech, aging engine, and a two-tier memory that consolidates conversations into first-person recollections as the details fade. Every component is swappable through configuration rather than code.
 
 > **Status:** The conversational actor works today — voice in, voice out, with memory and real-time aging. Computer vision and the projected avatar are designed but not yet built. See [ARCHITECTURE.md](ARCHITECTURE.md) for implemented-versus-planned status on every component.
 
