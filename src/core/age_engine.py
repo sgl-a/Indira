@@ -20,6 +20,11 @@ from src.core.state import ActorState
 logger = logging.getLogger(__name__)
 
 
+def _flat(text: str) -> str:
+    """Collapse a YAML block scalar into one line for the prompt."""
+    return " ".join(text.split())
+
+
 @dataclass
 class AgeStage:
     """Configuration for a specific age stage."""
@@ -27,12 +32,16 @@ class AgeStage:
     range: str  # e.g., "10-15"
     start_hour: float
     end_hour: float
-    # Loaded from profile YAML
-    personality_traits: list[str] | None = None
-    vocabulary_level: str | None = None
-    speaking_style: str | None = None
-    emotional_tendencies: list[str] | None = None
-    relationship_with_parent: str | None = None
+    # Loaded from profile YAML (keys are Spanish, matching the performance language)
+    motor_dramatico: dict | None = None  # quiere / obstaculo / tacticas
+    cree_de_ximena: str | None = None
+    estado_base: str | None = None
+    ritmo: str | None = None
+    vocabulario: str | None = None
+    mirada: dict | None = None  # nota / lee / rompe_el_silencio
+    rasgos: list[str] | None = None
+    ya_no: list[str] | None = None
+    muestras: list[dict] | None = None  # situacion / ximena|otro / indira
     voice_profile_path: str | None = None
     face_profile_path: str | None = None
 
@@ -70,11 +79,15 @@ class AgeEngine:
                 with open(personality_path) as f:
                     profile = yaml.safe_load(f) or {}
 
-                stage.personality_traits = profile.get("traits", [])
-                stage.vocabulary_level = profile.get("vocabulary_level")
-                stage.speaking_style = profile.get("speaking_style")
-                stage.emotional_tendencies = profile.get("emotional_tendencies", [])
-                stage.relationship_with_parent = profile.get("relationship_with_parent")
+                stage.motor_dramatico = profile.get("motor_dramatico")
+                stage.cree_de_ximena = profile.get("cree_de_ximena")
+                stage.estado_base = profile.get("estado_base")
+                stage.ritmo = profile.get("ritmo")
+                stage.vocabulario = profile.get("vocabulario")
+                stage.mirada = profile.get("mirada")
+                stage.rasgos = profile.get("rasgos", [])
+                stage.ya_no = profile.get("ya_no", [])
+                stage.muestras = profile.get("muestras", [])
 
                 # Voice and face files
                 voice_path = profile_dir / "voice_reference.wav"
@@ -149,8 +162,13 @@ class AgeEngine:
         """
         Build the system prompt for the LLM based on current age stage.
 
-        Combines permanent identity with age-specific traits.
+        Combines permanent identity with the age-specific profile.
         All in Spanish to match the performance language.
+
+        Section order is deliberate: objective (what she wants) first so it
+        colours everything read after it, then who she is, then how she
+        perceives, and dialogue exemplars last — closest to generation, where
+        few-shot anchoring does the most work against persona drift.
 
         Deliberately contains ONLY per-stage-stable content: Ollama reuses
         its KV cache for the byte-identical prompt prefix across requests,
@@ -174,32 +192,83 @@ class AgeEngine:
             for rule in identity:
                 prompt_parts.append(f"- {rule}")
 
-        # Age-specific traits (from profile YAML)
-        if stage.personality_traits:
+        # ── Objective first: what she is after right now drives everything else.
+        # (Hagen 7-9. Also the only place a plot-less, improvised piece can
+        #  carry its arc, and what lets an aligned model play friction as
+        #  pursuit of a legitimate goal rather than as a "be difficult" trait.)
+        motor = stage.motor_dramatico or {}
+        if motor.get("quiere"):
+            prompt_parts.extend(["", "## Lo que querés ahora"])
+            prompt_parts.append(f"Querés: {motor['quiere']}")
+            if motor.get("obstaculo"):
+                prompt_parts.append(f"Lo que se interpone: {motor['obstaculo']}")
+            if motor.get("tacticas"):
+                prompt_parts.append("Lo que hacés para conseguirlo:")
+                for tactic in motor["tacticas"]:
+                    prompt_parts.append(f"- {tactic}")
+
+        if stage.cree_de_ximena:
             prompt_parts.extend([
                 "",
-                f"## Tu edad actual ({stage.range} años)",
+                f"**Lo que creés de tu mamá:** {stage.cree_de_ximena}",
+                "(Podés estar equivocada.)",
             ])
-            for trait in stage.personality_traits:
+
+        if stage.rasgos:
+            prompt_parts.extend(["", f"## Cómo sos a los {stage.range} años"])
+            for trait in stage.rasgos:
                 prompt_parts.append(f"- {trait}")
 
-        if stage.speaking_style:
-            prompt_parts.extend(["", f"**Cómo hablás:** {stage.speaking_style}"])
+        if stage.ritmo:
+            prompt_parts.extend(["", f"**Tu ritmo al hablar:** {_flat(stage.ritmo)}"])
 
-        if stage.vocabulary_level:
-            prompt_parts.extend(["", f"**Vocabulario:** {stage.vocabulary_level}"])
+        if stage.vocabulario:
+            prompt_parts.extend(["", f"**Tu vocabulario:** {_flat(stage.vocabulario)}"])
 
-        if stage.emotional_tendencies:
-            prompt_parts.extend(["", "**Cómo sentís:**"])
-            for tendency in stage.emotional_tendencies:
-                prompt_parts.append(f"- {tendency}")
+        if stage.estado_base:
+            prompt_parts.extend(["", f"**Tu ánimo de base:** {_flat(stage.estado_base)}"])
 
-        if stage.relationship_with_parent:
+        # Perception: the vision layer supplies raw facts per turn; this says
+        # how someone of this age reads them.
+        mirada = stage.mirada or {}
+        if mirada:
+            prompt_parts.extend(["", "## Qué mirás"])
+            if mirada.get("nota"):
+                prompt_parts.append(f"Registrás: {_flat(mirada['nota'])}")
+            if mirada.get("lee"):
+                prompt_parts.append(f"Cómo lo interpretás: {_flat(mirada['lee'])}")
+            if mirada.get("rompe_el_silencio"):
+                prompt_parts.append(
+                    f"Qué te hace hablar primero: {_flat(mirada['rompe_el_silencio'])}"
+                )
+
+        if stage.ya_no:
+            prompt_parts.extend(["", "## Cosas que ya no hacés"])
+            for gone in stage.ya_no:
+                prompt_parts.append(f"- {gone}")
+
+        # Exemplars last before the format contract: few-shot dialogue anchors
+        # voice far harder than trait lists, and sitting near the end keeps it
+        # close to generation. Marked hard as examples — anything echoed
+        # verbatim goes straight out the speaker.
+        if stage.muestras:
             prompt_parts.extend([
                 "",
-                "## Tu relación con tu mamá",
-                stage.relationship_with_parent,
+                "## Ejemplos de cómo sonás",
+                "Muestran tu registro a esta edad. No son líneas para repetir:",
+                "nunca las digas textual.",
             ])
+            for sample in stage.muestras:
+                if not sample.get("indira"):
+                    continue
+                prompt_parts.append("")
+                if sample.get("situacion"):
+                    prompt_parts.append(f"({sample['situacion']})")
+                if sample.get("ximena"):
+                    prompt_parts.append(f"Mamá: {sample['ximena']}")
+                elif sample.get("otro"):
+                    prompt_parts.append(f"Otra persona: {sample['otro']}")
+                prompt_parts.append(f"Vos: {sample['indira']}")
 
         # Emotion tag — kept for TTS pipeline, presented as brief formatting note
         prompt_parts.extend([

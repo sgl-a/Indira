@@ -209,20 +209,26 @@ class Orchestrator:
             return_exceptions=True,
         )
 
+        # BaseException, not Exception: a child that raises CancelledError is
+        # reported by gather as a CancelledError *result*, which derives from
+        # BaseException. Narrowing on Exception would let that object through
+        # as if it were a live provider. (Cancellation of setup() itself can't
+        # reach here — gather re-raises in that case instead of returning.)
+
         # STT is optional — text mode runs without a mic stack
-        if isinstance(stt, Exception):
-            logger.warning(f"STT initialization failed: {stt}. Running in text-only mode.")
+        if isinstance(stt, BaseException):
+            logger.warning(f"STT initialization failed: {stt!r}. Running in text-only mode.")
             stt = None
         self.stt = stt
 
         # The rest are required. Assign whatever succeeded FIRST so
         # shutdown() can clean up a partial initialization, then fail loudly.
-        self.llm = llm if not isinstance(llm, Exception) else None
-        self.tts = tts if not isinstance(tts, Exception) else None
-        self.memory = memory if not isinstance(memory, Exception) else None
+        self.llm = llm if not isinstance(llm, BaseException) else None
+        self.tts = tts if not isinstance(tts, BaseException) else None
+        self.memory = memory if not isinstance(memory, BaseException) else None
         for name, result in (("LLM", llm), ("TTS", tts), ("Memory", memory)):
-            if isinstance(result, Exception):
-                raise RuntimeError(f"{name} provider failed to initialize: {result}") from result
+            if isinstance(result, BaseException):
+                raise RuntimeError(f"{name} provider failed to initialize: {result!r}") from result
 
         # Background memory consolidation (turns dropped from the short-term
         # window get compressed into long-term memories while she's idle)

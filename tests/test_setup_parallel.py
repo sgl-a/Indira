@@ -72,6 +72,55 @@ async def test_stt_failure_is_tolerated(tmp_path, monkeypatch):
     assert orch.llm and orch.tts and orch.memory
 
 
+def make_cancelling_creator(name):
+    """A create_*_provider whose coroutine raises CancelledError.
+
+    gather(return_exceptions=True) reports this as a CancelledError *result*,
+    and CancelledError derives from BaseException — so it slips past an
+    isinstance(x, Exception) guard while still being truthy.
+    """
+    async def create(config):
+        raise asyncio.CancelledError(f"{name} cancelled")
+    return create
+
+
+async def test_cancelled_stt_degrades_to_text_only(tmp_path, monkeypatch):
+    active, overlaps = [], []
+    for kind in ("llm", "tts", "memory"):
+        monkeypatch.setattr(
+            orchestrator_module, f"create_{kind}_provider",
+            make_creator(kind, 0.01, active, overlaps),
+        )
+    monkeypatch.setattr(
+        orchestrator_module, "create_stt_provider", make_cancelling_creator("stt")
+    )
+
+    orch = make_orchestrator(tmp_path)
+    await orch.setup()  # must not raise
+
+    # Not a CancelledError object masquerading as a provider
+    assert orch.stt is None
+
+
+async def test_cancelled_required_provider_aborts(tmp_path, monkeypatch):
+    active, overlaps = [], []
+    for kind in ("llm", "memory", "stt"):
+        monkeypatch.setattr(
+            orchestrator_module, f"create_{kind}_provider",
+            make_creator(kind, 0.01, active, overlaps),
+        )
+    monkeypatch.setattr(
+        orchestrator_module, "create_tts_provider", make_cancelling_creator("tts")
+    )
+
+    orch = make_orchestrator(tmp_path)
+    with pytest.raises(RuntimeError, match="TTS provider failed"):
+        await orch.setup()
+
+    assert orch.tts is None
+    assert orch.llm is not None
+
+
 async def test_required_provider_failure_aborts_with_partial_state(tmp_path, monkeypatch):
     active, overlaps = [], []
     for kind, fail in (("llm", False), ("tts", True), ("memory", False), ("stt", False)):
