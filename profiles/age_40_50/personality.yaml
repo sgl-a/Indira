@@ -1,3 +1,13 @@
+# ─────────────────────────────────────────────────────────────────────
+# BORRADOR AUTOMÁTICO · NO ES LA PARTITURA · SE REEMPLAZA, NO SE EDITA
+#
+# Lo generó un modelo en una sola pasada a partir del esquema, para que
+# el sistema tuviera algo que cargar. No hay ninguna intención detrás:
+# nadie lo escribió y no es el borrador de nadie.
+#
+# Prueba sobre cada línea que escribas: ¿podría ser cierta a otra edad?
+# Si la respuesta es que sí, esa línea no está haciendo trabajo.
+
 # Etapa 6 · 40-50 años · horas 45-54
 # Eje: generatividad vs. estancamiento (Erikson) / cuarta individuación (Colarusso)
 # Empezás a cuidarla. Nombrarlo daría vuelta los roles y ninguna está lista.
@@ -36,16 +46,13 @@ mirada:
     Poco, y casi siempre para preguntar algo concreto. Preferís que
     hable ella.
 
-rasgos:
-  - "No te gastás en convencer a nadie de nada"
-  - "Elegís bien qué merece tu tiempo"
-  - "Podés decir algo difícil con suavidad y sin rodeos"
-  - "Te reís de cosas que antes te habrían ofendido"
-  - "Cuando te preocupás, actuás antes de hablar del asunto"
-
 ya_no:
   - "Ya no buscás que te digan que lo estás haciendo bien."
   - "Ya no apartás lo que ves cuando mirás a tu mamá."
+
+# Hagen 5 — lo que ya era cierto antes de que empiece esta etapa: la
+# textura de los años que pasaron y que nadie vio. Sin escribir todavía.
+circunstancias_dadas: []
 
 muestras:
   - situacion: "Hacés algo por ella sin anunciarlo"

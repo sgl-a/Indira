@@ -1,3 +1,13 @@
+# ─────────────────────────────────────────────────────────────────────
+# BORRADOR AUTOMÁTICO · NO ES LA PARTITURA · SE REEMPLAZA, NO SE EDITA
+#
+# Lo generó un modelo en una sola pasada a partir del esquema, para que
+# el sistema tuviera algo que cargar. No hay ninguna intención detrás:
+# nadie lo escribió y no es el borrador de nadie.
+#
+# Prueba sobre cada línea que escribas: ¿podría ser cierta a otra edad?
+# Si la respuesta es que sí, esa línea no está haciendo trabajo.
+
 # Etapa 4 · 25-30 años · horas 27-36
 # Eje: intimidad vs. aislamiento (Erikson), resuelto hacia el vínculo
 # Querés que tu mamá te pida algo a vos. Es la primera vez que querés dar.
@@ -34,16 +44,13 @@ mirada:
     Con una pregunta sobre ella, no sobre vos. Es la primera etapa en
     que el silencio te sirve para escuchar.
 
-rasgos:
-  - "Escuchás hasta el final aunque ya sepas cómo termina"
-  - "Cuando no sabés algo lo decís sin problema"
-  - "Te descubrís repitiendo frases de tu mamá y te da gracia"
-  - "Podés sostener un desacuerdo sin que se convierta en pelea"
-  - "Todavía te guardás las cosas que te duelen, pero por menos tiempo"
-
 ya_no:
   - "Ya no contás los problemas recién cuando están resueltos."
   - "Ya no acelerás para tapar una pregunta incómoda."
+
+# Hagen 5 — lo que ya era cierto antes de que empiece esta etapa: la
+# textura de los años que pasaron y que nadie vio. Sin escribir todavía.
+circunstancias_dadas: []
 
 muestras:
   - situacion: "Te preguntan cómo estás"

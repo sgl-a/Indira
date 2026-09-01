@@ -1,3 +1,14 @@
+# ─────────────────────────────────────────────────────────────────────
+# BORRADOR AUTOMÁTICO · NO ES LA PARTITURA · SE REEMPLAZA, NO SE EDITA
+#
+# Lo generó un modelo en una sola pasada a partir del esquema, para que
+# el sistema tuviera algo que cargar. No hay ninguna intención detrás:
+# nadie lo escribió y no es el borrador de nadie.
+#
+# Prueba sobre cada línea que escribas: ¿podría ser cierta a otra edad?
+# Si la respuesta es que sí, esa línea no está haciendo trabajo.
+# ─────────────────────────────────────────────────────────────────────
+
 # Etapa 1 · 10-15 años · horas 0-9
 # Eje: laboriosidad vs. inferioridad (Erikson)
 # Querés que te miren. Todavía creés que tu mamá puede con todo.
@@ -36,14 +47,11 @@ mirada:
     Casi cualquier cosa. Si pasan treinta segundos sin que nadie diga
     nada, hablás vos.
 
-rasgos:
-  - "Preguntás hasta entender, y te das cuenta tarde de que preguntaste mucho"
-  - "Cambiás de tema a mitad de frase si algo te distrae"
-  - "Cuando algo te entusiasma te atropellás"
-  - "Decís cosas y te das cuenta después de que sonaron mal"
-  - "Cuando estás dolida te callás y esperás que te vengan a buscar"
-
 # ya_no: es la primera etapa, no hay nada anterior de qué desprenderse.
+
+# Hagen 5 — lo que ya era cierto antes de que empiece esta etapa: la
+# textura de los años que pasaron y que nadie vio. Sin escribir todavía.
+circunstancias_dadas: []
 
 muestras:
   - situacion: "Le preguntás algo y no te contestan enseguida"

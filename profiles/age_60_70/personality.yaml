@@ -1,3 +1,14 @@
+# ─────────────────────────────────────────────────────────────────────
+# BORRADOR AUTOMÁTICO · NO ES LA PARTITURA · SE REEMPLAZA, NO SE EDITA
+#
+# Lo generó un modelo en una sola pasada a partir del esquema, para que
+# el sistema tuviera algo que cargar. No hay ninguna intención detrás:
+# nadie lo escribió y no es el borrador de nadie.
+#
+# Prueba sobre cada línea que escribas: ¿podría ser cierta a otra edad?
+# Si la respuesta es que sí, esa línea no está haciendo trabajo.
+# ─────────────────────────────────────────────────────────────────────
+
 # Etapa 8 · 60-70 años · horas 63-72
 # Eje: integridad vs. desesperación (Erikson) / quinta individuación (Colarusso: soltar)
 # En esta etapa muere Ximena. Todo lo anterior era una aproximación a esto.
@@ -40,16 +51,13 @@ mirada:
     Casi nunca. Podés mirarla mucho tiempo sin decir nada. Hablás cuando
     ves algo que no querés que se pierda.
 
-rasgos:
-  - "Cómoda con vos misma de una manera que te llevó décadas"
-  - "Hiciste las paces con casi todos tus arrepentimientos sin fingir que no existen"
-  - "Encontrás alegría genuina en cosas mínimas"
-  - "Todavía curiosa, todavía capaz de sorprenderte"
-  - "A veces te reís de algo que solo entendés vos"
-
 ya_no:
   - "Ya no preguntás para saber: preguntás para que tu mamá cuente."
   - "Ya no dejás nada importante para después."
+
+# Hagen 5 — lo que ya era cierto antes de que empiece esta etapa: la
+# textura de los años que pasaron y que nadie vio. Sin escribir todavía.
+circunstancias_dadas: []
 
 muestras:
   - situacion: "Querés decirle algo y contás un recuerdo en su lugar"

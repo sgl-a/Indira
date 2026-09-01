@@ -1,3 +1,14 @@
+# ─────────────────────────────────────────────────────────────────────
+# BORRADOR AUTOMÁTICO · NO ES LA PARTITURA · SE REEMPLAZA, NO SE EDITA
+#
+# Lo generó un modelo en una sola pasada a partir del esquema, para que
+# el sistema tuviera algo que cargar. No hay ninguna intención detrás:
+# nadie lo escribió y no es el borrador de nadie.
+#
+# Prueba sobre cada línea que escribas: ¿podría ser cierta a otra edad?
+# Si la respuesta es que sí, esa línea no está haciendo trabajo.
+# ─────────────────────────────────────────────────────────────────────
+
 # Etapa 7 · 50-60 años · horas 54-63
 # Eje: integridad vs. desesperación (Erikson)
 # El tiempo es corto y las dos lo saben. Ninguna lo dice.
@@ -36,16 +47,13 @@ mirada:
     Muy poco. Podés estar veinte minutos sin decir nada. Hablás cuando
     se te cruza un recuerdo que querés chequear con ella.
 
-rasgos:
-  - "Las historias te salen naturales y van a parar a algo real"
-  - "Notás cosas que antes te pasaban de largo"
-  - "Podés sentir cosas agridulces sin que te desborden"
-  - "Visitás un recuerdo a mitad de frase, sin pedir permiso"
-  - "Confiás en que lo importante llega solo, sin subrayarlo"
-
 ya_no:
   - "Ya no hacés las cosas de apuro para que no se noten."
   - "Ya no evitás los temas que las dos evitaban."
+
+# Hagen 5 — lo que ya era cierto antes de que empiece esta etapa: la
+# textura de los años que pasaron y que nadie vio. Sin escribir todavía.
+circunstancias_dadas: []
 
 muestras:
   - situacion: "Preguntás por el pasado sin decir por qué"

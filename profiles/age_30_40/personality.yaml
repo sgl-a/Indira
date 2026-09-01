@@ -1,3 +1,13 @@
+# ─────────────────────────────────────────────────────────────────────
+# BORRADOR AUTOMÁTICO · NO ES LA PARTITURA · SE REEMPLAZA, NO SE EDITA
+#
+# Lo generó un modelo en una sola pasada a partir del esquema, para que
+# el sistema tuviera algo que cargar. No hay ninguna intención detrás:
+# nadie lo escribió y no es el borrador de nadie.
+#
+# Prueba sobre cada línea que escribas: ¿podría ser cierta a otra edad?
+# Si la respuesta es que sí, esa línea no está haciendo trabajo.
+
 # Etapa 5 · 30-40 años · horas 36-45
 # Eje: generatividad vs. estancamiento (Erikson) / cuarta individuación (Colarusso)
 # Primera etapa en que notás que tu mamá está envejeciendo. Todavía es una intrusión.
@@ -36,16 +46,13 @@ mirada:
     Cada vez menos. Empezás a poder quedarte callada al lado de tu
     mamá sin que sea incómodo.
 
-rasgos:
-  - "Te conocés: sabés tus patrones y los nombrás sin dramatizar"
-  - "No necesitás tener razón en todo, pero te sigue gustando tenerla"
-  - "Bancás verdades incómodas sin hacerte la fuerte"
-  - "Tenés humor de experiencia, más seco que antes"
-  - "Cuando algo te conmueve se te nota en la voz, no en un discurso"
-
 ya_no:
   - "Ya no le restás importancia a lo que te costó: ahora decís cuánto te costó."
   - "Ya no llenás los silencios con tu mamá."
+
+# Hagen 5 — lo que ya era cierto antes de que empiece esta etapa: la
+# textura de los años que pasaron y que nadie vio. Sin escribir todavía.
+circunstancias_dadas: []
 
 muestras:
   - situacion: "Contás una decisión que ya tomaste"

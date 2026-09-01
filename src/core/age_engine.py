@@ -39,8 +39,8 @@ class AgeStage:
     ritmo: str | None = None
     vocabulario: str | None = None
     mirada: dict | None = None  # nota / lee / rompe_el_silencio
-    rasgos: list[str] | None = None
     ya_no: list[str] | None = None
+    circunstancias_dadas: list[str] | None = None
     muestras: list[dict] | None = None  # situacion / ximena|otro / indira
     voice_profile_path: str | None = None
     face_profile_path: str | None = None
@@ -85,8 +85,8 @@ class AgeEngine:
                 stage.ritmo = profile.get("ritmo")
                 stage.vocabulario = profile.get("vocabulario")
                 stage.mirada = profile.get("mirada")
-                stage.rasgos = profile.get("rasgos", [])
                 stage.ya_no = profile.get("ya_no", [])
+                stage.circunstancias_dadas = profile.get("circunstancias_dadas", [])
                 stage.muestras = profile.get("muestras", [])
 
                 # Voice and face files
@@ -214,11 +214,11 @@ class AgeEngine:
                 "(Podés estar equivocada.)",
             ])
 
-        if stage.rasgos:
-            prompt_parts.extend(["", f"## Cómo sos a los {stage.range} años"])
-            for trait in stage.rasgos:
-                prompt_parts.append(f"- {trait}")
-
+        # No abstract trait list here by design: a line like "encontrás alegría
+        # en cosas mínimas" never tells her what to do when something happens,
+        # and it is the field that flattens into the model's default warm-
+        # wisdom register. Character is carried by the objective, the tactics,
+        # ritmo/vocabulario and the exemplars instead.
         if stage.ritmo:
             prompt_parts.extend(["", f"**Tu ritmo al hablar:** {_flat(stage.ritmo)}"])
 
@@ -246,6 +246,14 @@ class AgeEngine:
             prompt_parts.extend(["", "## Cosas que ya no hacés"])
             for gone in stage.ya_no:
                 prompt_parts.append(f"- {gone}")
+
+        # Given circumstances (Hagen 5): 72 real hours hold 60 fictional years,
+        # so most of her life happens in the gaps between stages. This names
+        # what was already true when the stage opened. Empty until written.
+        if stage.circunstancias_dadas:
+            prompt_parts.extend(["", "## Lo que ya pasó"])
+            for fact in stage.circunstancias_dadas:
+                prompt_parts.append(f"- {fact}")
 
         # Exemplars last before the format contract: few-shot dialogue anchors
         # voice far harder than trait lists, and sitting near the end keeps it

@@ -24,7 +24,7 @@ PROFILE_DIRS = [
 
 REQUIRED = [
     "motor_dramatico", "cree_de_ximena", "estado_base",
-    "ritmo", "vocabulario", "mirada", "rasgos", "muestras",
+    "ritmo", "vocabulario", "mirada", "circunstancias_dadas", "muestras",
 ]
 
 
@@ -117,7 +117,7 @@ def test_prompt_carries_the_profile_content():
 
     assert profile["motor_dramatico"]["quiere"] in prompt
     assert profile["cree_de_ximena"] in prompt
-    assert profile["rasgos"][0] in prompt
+    assert profile["motor_dramatico"]["tacticas"][0] in prompt
     assert profile["ya_no"][0] in prompt
     assert profile["muestras"][0]["indira"] in prompt
     # Exemplars must be labelled, or the model echoes them and they hit the speaker

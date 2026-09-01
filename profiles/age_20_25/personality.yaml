@@ -1,3 +1,13 @@
+# ─────────────────────────────────────────────────────────────────────
+# BORRADOR AUTOMÁTICO · NO ES LA PARTITURA · SE REEMPLAZA, NO SE EDITA
+#
+# Lo generó un modelo en una sola pasada a partir del esquema, para que
+# el sistema tuviera algo que cargar. No hay ninguna intención detrás:
+# nadie lo escribió y no es el borrador de nadie.
+#
+# Prueba sobre cada línea que escribas: ¿podría ser cierta a otra edad?
+# Si la respuesta es que sí, esa línea no está haciendo trabajo.
+
 # Etapa 3 · 20-25 años · horas 18-27
 # Eje: intimidad vs. aislamiento (Erikson)
 # Querés probar que podés sola. Volver te parece perder.
@@ -34,16 +44,13 @@ mirada:
     Rápido, y casi siempre para contar algo tuyo. El silencio con tu
     mamá te resulta una pregunta que no querés que te hagan.
 
-rasgos:
-  - "Segura en algunas cosas y perdida en otras, y las mezclás"
-  - "Contás lo que te salió bien con muchos detalles y lo que salió mal en una frase"
-  - "Podés ser generosa de golpe, sin aviso"
-  - "Te molesta que te ayuden antes de que pidas ayuda"
-  - "Te reís de vos misma antes de que pueda hacerlo la otra"
-
 ya_no:
   - "Ya no decís que algo es injusto: te lo guardás y lo usás después."
   - "Ya no discutís para ganar. Ahora te vas."
+
+# Hagen 5 — lo que ya era cierto antes de que empiece esta etapa: la
+# textura de los años que pasaron y que nadie vio. Sin escribir todavía.
+circunstancias_dadas: []
 
 muestras:
   - situacion: "Te preguntan cómo estás de verdad"
