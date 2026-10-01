@@ -1,0 +1,1192 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Indira System Architecture</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@800&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<style>
+  :root {
+    --bg: #ECEEF2;
+    --surface: #F8F9FB;
+    --surface-2: #E2E6ED;
+    --ink: #141822;
+    --muted: #566074;
+    --line: #C3C9D4;
+    --accent: #2B43AE;
+    --accent-soft: #DAE0F6;
+    --warm: #985100;
+    --warm-soft: #F5E4CB;
+    --ok: #2A7849;
+    --plan: #7C8395;
+    --display: "Big Shoulders Display", "Arial Narrow", "Roboto Condensed", sans-serif;
+    --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #0D1018;
+      --surface: #151923;
+      --surface-2: #1D2230;
+      --ink: #E6E9F0;
+      --muted: #9BA3B5;
+      --line: #2D3445;
+      --accent: #93A6FF;
+      --accent-soft: #222B50;
+      --warm: #EFB050;
+      --warm-soft: #382812;
+      --ok: #6BCB90;
+      --plan: #7B8398;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0D1018;
+    --surface: #151923;
+    --surface-2: #1D2230;
+    --ink: #E6E9F0;
+    --muted: #9BA3B5;
+    --line: #2D3445;
+    --accent: #93A6FF;
+    --accent-soft: #222B50;
+    --warm: #EFB050;
+    --warm-soft: #382812;
+    --ok: #6BCB90;
+    --plan: #7B8398;
+  }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 16px/1.65 var(--sans);
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    html { scroll-behavior: smooth; }
+  }
+
+  .layout {
+    display: grid;
+    grid-template-columns: 230px minmax(0, 1fr);
+    gap: 56px;
+    max-width: 1240px;
+    margin: 0 auto;
+    padding-inline: clamp(16px, 4vw, 40px);
+    padding-block: 36px 72px;
+  }
+  @media (max-width: 920px) {
+    .layout { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  }
+
+  /* ── Contents ── */
+  .toc {
+    position: sticky;
+    top: calc(env(safe-area-inset-top, 0px) + 24px);
+    align-self: start;
+    max-height: calc(100vh - 48px);
+    overflow-y: auto;
+    font-size: 13.5px;
+    line-height: 1.4;
+  }
+  @media (max-width: 920px) {
+    .toc { position: static; max-height: none; border-block: 1px solid var(--line); padding-block: 10px; }
+  }
+  .toc summary {
+    font: 500 11.5px/1.4 var(--mono);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    cursor: pointer;
+    padding-block: 4px;
+  }
+  .toc ol { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 2px; }
+  .toc a {
+    display: block;
+    padding: 4px 8px;
+    border-radius: 5px;
+    color: var(--ink);
+    text-decoration: none;
+  }
+  .toc a:hover { background: var(--surface-2); }
+  .toc .toc-l3 a { padding-left: 22px; color: var(--muted); font-size: 13px; }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ── Document ── */
+  .doc { min-width: 0; max-width: 880px; }
+  .doc > :first-child { margin-top: 0; }
+  .doc h1 {
+    font: 800 clamp(48px, 7vw, 76px)/0.95 var(--display);
+    text-transform: uppercase;
+    letter-spacing: 0.01em;
+    margin: 0 0 20px;
+    text-wrap: balance;
+  }
+  .doc h2 {
+    font-size: 27px;
+    line-height: 1.2;
+    font-weight: 600;
+    margin: 56px 0 14px;
+    padding-top: 22px;
+    border-top: 1px solid var(--line);
+    text-wrap: balance;
+  }
+  .doc h3 { font-size: 20px; line-height: 1.3; font-weight: 600; margin: 40px 0 10px; text-wrap: balance; }
+  .doc h4 { font-size: 16.5px; font-weight: 600; margin: 28px 0 8px; }
+  .doc h2, .doc h3, .doc h4 { scroll-margin-top: 20px; }
+  .doc p, .doc li { max-width: 72ch; }
+  .doc p { margin: 0 0 14px; }
+  .doc ul, .doc ol { padding-left: 1.4em; margin: 0 0 14px; }
+  .doc li { margin: 4px 0; }
+  .doc a { color: var(--accent); text-underline-offset: 2px; }
+  .doc strong { font-weight: 600; }
+  .doc hr { border: 0; border-top: 1px solid var(--line); margin: 40px 0; }
+
+  .doc code {
+    font: 0.86em var(--mono);
+    background: var(--surface-2);
+    padding: 1px 5px;
+    border-radius: 4px;
+  }
+  .doc pre {
+    font: 13px/1.55 var(--mono);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    margin: 0 0 18px;
+  }
+  .doc pre code { background: none; padding: 0; font-size: inherit; }
+
+  .note {
+    margin: 0 0 18px;
+    padding: 12px 16px;
+    background: var(--surface);
+    border-left: 3px solid var(--line);
+    border-radius: 0 8px 8px 0;
+  }
+  .note > :last-child { margin-bottom: 0; }
+  .note p { max-width: none; }
+  .note-ok { border-left-color: var(--ok); }
+  .note-partial, .note-warn { border-left-color: var(--warm); }
+  .note-planned { border-left-color: var(--plan); border-left-style: dashed; }
+
+  .table-wrap { overflow-x: auto; margin: 0 0 20px; }
+  .doc table { border-collapse: collapse; width: 100%; font-size: 14.5px; line-height: 1.5; }
+  .doc th, .doc td { text-align: left; vertical-align: top; padding: 9px 12px; border-bottom: 1px solid var(--line); }
+  .doc thead th {
+    font-weight: 600;
+    border-bottom: 1.5px solid var(--ink);
+    white-space: nowrap;
+  }
+
+  figure.diagram {
+    margin: 0 0 20px;
+    padding: 18px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    overflow-x: auto;
+  }
+  figure.diagram svg { display: block; margin: 0 auto; height: auto; }
+  .diagram-src {
+    margin: 0;
+    border: 0;
+    padding: 0;
+    background: none;
+    color: var(--muted);
+  }
+
+  footer {
+    margin-top: 64px;
+    padding-top: 14px;
+    border-top: 1px solid var(--line);
+    font: 12.5px/1.5 var(--mono);
+    color: var(--muted);
+  }
+</style>
+
+<div class="layout" lang="en">
+  <nav class="toc" aria-label="Contents">
+    <details open>
+      <summary>Contents</summary>
+<ol>
+<li class="toc-l2"><a href="#overview">Overview</a></li>
+<li class="toc-l2"><a href="#implementation-status">Implementation Status</a></li>
+<li class="toc-l2"><a href="#high-level-data-flow">High-Level Data Flow</a></li>
+<li class="toc-l2"><a href="#detailed-component-data-flows">Detailed Component Data Flows</a></li>
+<li class="toc-l3"><a href="#1-perception-pipeline">1. Perception Pipeline</a></li>
+<li class="toc-l3"><a href="#2-cognition-pipeline">2. Cognition Pipeline</a></li>
+<li class="toc-l3"><a href="#3-output-pipeline">3. Output Pipeline</a></li>
+<li class="toc-l3"><a href="#4-memory-system">4. Memory System</a></li>
+<li class="toc-l3"><a href="#5-age-progression-system">5. Age Progression System</a></li>
+<li class="toc-l2"><a href="#6-the-prompt-cache-contract-">6. The Prompt-Cache Contract ✅</a></li>
+<li class="toc-l2"><a href="#7-the-turn-cycle-">7. The Turn Cycle ✅</a></li>
+<li class="toc-l2"><a href="#8-persistence--resume-">8. Persistence &amp; Resume ✅</a></li>
+<li class="toc-l2"><a href="#9-proactive-conversation-initiation">9. Proactive Conversation Initiation</a></li>
+<li class="toc-l2"><a href="#10-failure--recovery">10. Failure &amp; Recovery</a></li>
+<li class="toc-l2"><a href="#11-code-map">11. Code Map</a></li>
+<li class="toc-l2"><a href="#physical-setup-diagram">Physical Setup Diagram</a></li>
+</ol>
+    </details>
+  </nav>
+  <main class="doc">
+<h1 id="indira--system-architecture">Indira — System Architecture</h1>
+<blockquote class="note">
+<p><strong>Last updated</strong>: 2026-08-19
+<strong>Status</strong>: Living document — it holds both the <strong>target design</strong> and the <strong>current implementation</strong>, deliberately.</p>
+<p><strong>Read this first.</strong> The target design describes the full installation as originally conceived. A significant part of it is <strong>not built yet</strong>, and that is expected at this stage. Every section is tagged:</p>
+<ul>
+<li>✅ <strong>Implemented</strong> — exists and works in <code>src/</code></li>
+<li>🟡 <strong>Partial</strong> — code exists but is incomplete or not wired in</li>
+<li>🔜 <strong>Planned</strong> — designed here, not yet in code</li>
+</ul>
+<p>Where a built subsystem diverged from the original design, both are shown: what runs today, and what the design still aims at. See <a href="https://github.com/sgl-a/Indira/blob/main/TECH_STACK.md" target="_blank" rel="noopener">TECH_STACK.md</a> for the technology choices behind each component.</p>
+</blockquote>
+<hr />
+<h2 id="overview">Overview</h2>
+<p>A 72-hour AI theatrical performance. An artificial being ages from 10 to 70 in real time, conversing with a live actress. The target system perceives through cameras and microphones, thinks through a local LLM, and expresses itself through synthesized voice and a projected animated face.</p>
+<p><strong>What runs today</strong> is the audio spine of that system: microphone → speech-to-text → orchestrator → LLM → text-to-speech → speakers, with aging personality, two-tier memory, and emotional expression. Everything is local; no cloud calls at runtime.</p>
+<hr />
+<h2 id="implementation-status">Implementation Status</h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Layer</th>
+<th>Component</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Perception</td>
+<td>Microphone capture + energy VAD</td>
+<td>✅ Implemented</td>
+</tr>
+<tr>
+<td>Perception</td>
+<td>STT (mlx-whisper) + anti-hallucination filtering</td>
+<td>✅ Implemented</td>
+</tr>
+<tr>
+<td>Perception</td>
+<td>Speaker identification</td>
+<td>🔜 Planned — field exists, nothing populates it</td>
+</tr>
+<tr>
+<td>Perception</td>
+<td>Camera / face detection / recognition</td>
+<td>🔜 Planned</td>
+</tr>
+<tr>
+<td>Perception</td>
+<td>Visual emotion detection</td>
+<td>🔜 Planned</td>
+</tr>
+<tr>
+<td>Cognition</td>
+<td>Orchestrator conversation loop</td>
+<td>✅ Implemented</td>
+</tr>
+<tr>
+<td>Cognition</td>
+<td>LLM brain (Ollama, streaming, emotion tags)</td>
+<td>✅ Implemented</td>
+</tr>
+<tr>
+<td>Cognition</td>
+<td>Age engine (8 stages, prompt building, <code>/age</code> travel)</td>
+<td>✅ Implemented</td>
+</tr>
+<tr>
+<td>Cognition</td>
+<td>Long-term memory (Chroma semantic / simple keyword)</td>
+<td>✅ Implemented</td>
+</tr>
+<tr>
+<td>Cognition</td>
+<td>Short-term window + block trimming</td>
+<td>✅ Implemented</td>
+</tr>
+<tr>
+<td>Cognition</td>
+<td>Memory consolidation (in-character compression)</td>
+<td>✅ Implemented</td>
+</tr>
+<tr>
+<td>Cognition</td>
+<td>Prompt-cache optimization (stable prefix, idle prewarm)</td>
+<td>✅ Implemented</td>
+</tr>
+<tr>
+<td>Cognition</td>
+<td>Importance-weighted retrieval</td>
+<td>🟡 Consolidation self-scores; retrieval ignores it</td>
+</tr>
+<tr>
+<td>Cognition</td>
+<td>Decision engine / proactive initiation</td>
+<td>🔜 Planned — no code, no config</td>
+</tr>
+<tr>
+<td>Output</td>
+<td>TTS → speaker (Qwen3-TTS, macOS <code>say</code> fallback)</td>
+<td>✅ Implemented</td>
+</tr>
+<tr>
+<td>Output</td>
+<td>TTS input sanitization</td>
+<td>✅ Implemented</td>
+</tr>
+<tr>
+<td>Output</td>
+<td>Overlapping streaming TTS pipeline</td>
+<td>✅ Implemented</td>
+</tr>
+<tr>
+<td>Output</td>
+<td>Age-based voice change</td>
+<td>🟡 Designed, not applied — one voice today</td>
+</tr>
+<tr>
+<td>Output</td>
+<td>Avatar / face animation / lip-sync</td>
+<td>🔜 Planned</td>
+</tr>
+<tr>
+<td>Output</td>
+<td>Video output / projection / smoke screen</td>
+<td>🔜 Planned</td>
+</tr>
+<tr>
+<td>Reliability</td>
+<td>Transcript + performance-state persistence</td>
+<td>✅ Implemented</td>
+</tr>
+<tr>
+<td>Reliability</td>
+<td>Crash resume inside the 72h window</td>
+<td>✅ Implemented</td>
+</tr>
+<tr>
+<td>Reliability</td>
+<td>A/V sync</td>
+<td>🔜 Planned</td>
+</tr>
+<tr>
+<td>Reliability</td>
+<td>Watchdog / failure recovery</td>
+<td>🔜 Planned</td>
+</tr>
+<tr>
+<td>Reliability</td>
+<td>72-hour endurance validation</td>
+<td>🔜 Planned</td>
+</tr>
+</tbody>
+</table>
+</div>
+<hr />
+<h2 id="high-level-data-flow">High-Level Data Flow</h2>
+<blockquote class="note note-partial">
+<p>🟡 <strong>Partial.</strong> The audio path (mic → STT → orchestrator → LLM → TTS → speakers) is ✅ implemented. Camera/CV inputs and avatar/projector outputs are 🔜 planned. This is the <strong>target</strong> diagram; dashed elements below are not built.</p>
+</blockquote>
+<figure class="diagram"><pre class="diagram-src">flowchart TB
+    subgraph WORLD [&quot;🌍 THE WORLD&quot;]
+        ACTRESS[&quot;👩‍🎭 Actress&quot;]
+        AUDIENCE[&quot;👥 Audience&quot;]
+        SMOKE[&quot;💨 Smoke Screen 🔜&quot;]
+        SPEAKERS[&quot;🔊 Speakers&quot;]
+    end
+
+    subgraph PERCEPTION [&quot;👁️ PERCEPTION LAYER&quot;]
+        CAM[&quot;📷 Camera 🔜&quot;]
+        MIC[&quot;🎤 Microphone ✅&quot;]
+        CV[&quot;Computer Vision 🔜&lt;br/&gt;• Face Recognition&lt;br/&gt;• Emotion Detection&quot;]
+        STT[&quot;Speech-to-Text ✅&lt;br/&gt;(mlx-whisper)&quot;]
+    end
+
+    subgraph COGNITION [&quot;🧠 COGNITION LAYER&quot;]
+        ORCHESTRATOR[&quot;⚡ Orchestrator ✅&lt;br/&gt;• State Manager&lt;br/&gt;• Turn Cycle&quot;]
+        LLM[&quot;🧠 Brain (LLM) ✅&lt;br/&gt;• Personality&lt;br/&gt;• Emotion tags&quot;]
+        MEMORY[&quot;💾 Memory ✅&lt;br/&gt;• Short-term window&lt;br/&gt;• Long-term vector&lt;br/&gt;• Consolidation&quot;]
+        AGE[&quot;⏳ Age Engine ✅&lt;br/&gt;• Stage Tracker&lt;br/&gt;• Prompt Builder&quot;]
+    end
+
+    subgraph OUTPUT [&quot;🎭 OUTPUT LAYER&quot;]
+        TTS[&quot;🗣️ Text-to-Speech ✅&lt;br/&gt;(Qwen3-TTS)&quot;]
+        AVATAR[&quot;🎬 Avatar Engine 🔜&lt;br/&gt;• Video Gen&lt;br/&gt;• Lip Sync&quot;]
+        AUDIO_OUT[&quot;🔈 Audio Output ✅&lt;br/&gt;(afplay)&quot;]
+        VIDEO_OUT[&quot;📺 Video Output 🔜&quot;]
+    end
+
+    ACTRESS --&gt; MIC
+    AUDIENCE --&gt; MIC
+    ACTRESS -.-&gt; CAM
+    AUDIENCE -.-&gt; CAM
+
+    CAM -.-&gt; CV
+    MIC --&gt; STT
+
+    CV -.-&gt;|&quot;who, emotion, scene&quot;| ORCHESTRATOR
+    STT --&gt;|&quot;transcribed text&quot;| ORCHESTRATOR
+
+    ORCHESTRATOR &lt;--&gt;|&quot;context&quot;| LLM
+    ORCHESTRATOR &lt;--&gt;|&quot;recall/store&quot;| MEMORY
+    ORCHESTRATOR &lt;--&gt;|&quot;current age traits&quot;| AGE
+    LLM --&gt;|&quot;response + emotion&quot;| ORCHESTRATOR
+
+    ORCHESTRATOR --&gt;|&quot;sanitized text + emotion&quot;| TTS
+    ORCHESTRATOR -.-&gt;|&quot;expression data&quot;| AVATAR
+    TTS -.-&gt;|&quot;audio stream&quot;| AVATAR
+    TTS --&gt; AUDIO_OUT
+    AVATAR -.-&gt; VIDEO_OUT
+
+    AUDIO_OUT --&gt; SPEAKERS
+    VIDEO_OUT -.-&gt; SMOKE
+    SPEAKERS --&gt; ACTRESS
+    SPEAKERS --&gt; AUDIENCE
+    SMOKE -.-&gt; AUDIENCE
+</pre></figure>
+<hr />
+<h2 id="detailed-component-data-flows">Detailed Component Data Flows</h2>
+<h3 id="1-perception-pipeline">1. Perception Pipeline</h3>
+<blockquote class="note note-partial">
+<p>🟡 <strong>Partial.</strong> Audio path ✅ — mic capture, energy-based VAD with pre-roll, mlx-whisper STT, and anti-hallucination filtering (<code>orchestrator.run_voice_mode</code>, around lines 986–1034). Vision path 🔜 not built. <strong>Speaker identification is not implemented</strong> — <code>TranscriptionResult.speaker_id</code> and <code>ConversationTurn.speaker_id</code> exist and are plumbed through persistence, but nothing populates them.</p>
+</blockquote>
+<figure class="diagram"><pre class="diagram-src">flowchart LR
+    subgraph INPUT [&quot;Raw Input&quot;]
+        CAM[&quot;📷 Camera 🔜&lt;br/&gt;(30fps video)&quot;]
+        MIC[&quot;🎤 Microphone ✅&lt;br/&gt;(16kHz mono)&quot;]
+    end
+
+    subgraph VISION [&quot;Vision Processing 🔜&quot;]
+        DETECT[&quot;Face Detection&lt;br/&gt;(MediaPipe)&quot;]
+        RECOG[&quot;Face Recognition&lt;br/&gt;(identify actress)&quot;]
+        EMOTION[&quot;Emotion Detection&lt;br/&gt;(deepface)&quot;]
+        TRACK[&quot;Person Tracker&quot;]
+    end
+
+    subgraph AUDIO [&quot;Audio Processing&quot;]
+        VAD[&quot;Voice Activity ✅&lt;br/&gt;(energy + preroll)&quot;]
+        STT[&quot;Whisper STT ✅&quot;]
+        FILTER[&quot;Hallucination ✅&lt;br/&gt;Filter&quot;]
+        SPEAKER_ID[&quot;Speaker ID 🔜&quot;]
+    end
+
+    subgraph PERCEPTION_OUT [&quot;Perception Output&quot;]
+        VISUAL_CTX[&quot;Visual Context 🔜&lt;br/&gt;{&lt;br/&gt;  actress_present: bool&lt;br/&gt;  actress_emotion: str&lt;br/&gt;  audience_count: int&lt;br/&gt;}&quot;]
+        SPEECH_CTX[&quot;TranscriptionResult ✅&lt;br/&gt;{&lt;br/&gt;  text: str&lt;br/&gt;  confidence: float&lt;br/&gt;  language: str&lt;br/&gt;  speaker_id: None 🔜&lt;br/&gt;}&quot;]
+    end
+
+    CAM -.-&gt; DETECT -.-&gt; RECOG -.-&gt; EMOTION -.-&gt; TRACK -.-&gt; VISUAL_CTX
+    MIC --&gt; VAD --&gt; STT --&gt; FILTER --&gt; SPEECH_CTX
+    FILTER -.-&gt; SPEAKER_ID -.-&gt; SPEECH_CTX
+</pre></figure>
+<p><strong>Anti-hallucination filtering</strong> is worth noting because it is not in the original design. Whisper emits characteristic phantom phrases on silence or noise (&quot;thank you for watching&quot;, subtitle credits). These are filtered before reaching the orchestrator — without it, room noise generates conversational turns and the character responds to nobody.</p>
+<p><strong>Audio parameters</strong> (<code>config/default.yaml</code>): 16 kHz mono, <code>energy_threshold 0.03</code>, <code>silence_duration_ms 800</code>, <code>preroll_ms 300</code>. Language pinned to <code>es</code>.</p>
+<hr />
+<h3 id="2-cognition-pipeline">2. Cognition Pipeline</h3>
+<blockquote class="note note-ok">
+<p>✅ <strong>Mostly implemented.</strong> Orchestrator, context building, LLM call, response parsing, and memory write all exist. The <strong>Decision Engine</strong> (&quot;should respond? / initiate?&quot;) is 🔜 not built — every input currently gets a response.</p>
+</blockquote>
+<figure class="diagram"><pre class="diagram-src">flowchart TB
+    subgraph INPUTS [&quot;Inputs from Perception&quot;]
+        VISUAL[&quot;Visual Context 🔜&quot;]
+        SPEECH[&quot;Transcribed Speech ✅&quot;]
+    end
+
+    subgraph ORCHESTRATOR [&quot;⚡ Orchestrator&quot;]
+        DECISION[&quot;Decision Engine 🔜&lt;br/&gt;• Should respond?&lt;br/&gt;• Initiate convo?&quot;]
+        STATE[&quot;ActorState ✅&lt;br/&gt;• current_emotion&lt;br/&gt;• conversation_history&lt;br/&gt;• hours_elapsed&quot;]
+    end
+
+    subgraph CONTEXT_BUILDER [&quot;Context Builder ✅&quot;]
+        AGE_TRAITS[&quot;Age Engine&lt;br/&gt;build_personality_prompt()&lt;br/&gt;→ STABLE per stage&quot;]
+        MEM_RETRIEVAL[&quot;Memory Retrieval&lt;br/&gt;semantic search, limit 5&quot;]
+        ENVELOPE[&quot;_wrap_with_context()&lt;br/&gt;→ [Contexto] on newest msg&quot;]
+    end
+
+    subgraph LLM_CALL [&quot;LLM Processing ✅&quot;]
+        LLM[&quot;🧠 Ollama&lt;br/&gt;(gemma4:12b, streaming)&quot;]
+        PARSE[&quot;Stream Filters&lt;br/&gt;• [emoción] tag strip&lt;br/&gt;• #lt;think#gt; block strip&quot;]
+    end
+
+    subgraph MEM_WRITE [&quot;Memory Write ✅&quot;]
+        WINDOW[&quot;Append to&lt;br/&gt;short-term window&quot;]
+        PERSIST[&quot;Append to&lt;br/&gt;transcript.jsonl&quot;]
+        CONSOL[&quot;Consolidation queue&lt;br/&gt;(on eviction, background)&quot;]
+    end
+
+    VISUAL -.-&gt; DECISION
+    SPEECH --&gt; DECISION
+    DECISION --&gt; STATE
+    STATE --&gt; AGE_TRAITS
+    STATE --&gt; MEM_RETRIEVAL
+    MEM_RETRIEVAL --&gt; ENVELOPE
+    AGE_TRAITS --&gt; LLM
+    ENVELOPE --&gt; LLM
+    LLM --&gt; PARSE
+    PARSE --&gt; STATE
+    PARSE --&gt; WINDOW --&gt; PERSIST
+    WINDOW --&gt;|&quot;evicted turns&quot;| CONSOL
+</pre></figure>
+<h4 id="what-actually-reaches-the-llm">What actually reaches the LLM</h4>
+<blockquote class="note note-warn">
+<p>⚠️ <strong>Corrected.</strong> Earlier versions of this document showed a structured JSON request and a structured JSON response. <strong>Neither exists.</strong> The real protocol is a standard chat completion with a plain-text response, and the structure below is load-bearing for the prompt-cache contract (§6).</p>
+</blockquote>
+<p><strong>Request</strong> — three parts, each with a different volatility:</p>
+<pre><code>system_prompt:  built by age_engine.build_personality_prompt()
+                permanent identity (from config) + age-stage traits (from profiles/)
+                ── BYTE-STABLE for the whole age stage; no per-turn content ──
+
+messages:       [ {role: &quot;user&quot;,      content: &quot;...&quot;},
+                  {role: &quot;assistant&quot;, content: &quot;[emoción] ...&quot;},   ← tags re-prefixed on replay
+                  ...                                                by get_recent_messages()
+                  {role: &quot;user&quot;,      content: &quot;[Contexto — no es parte del diálogo:
+                                                 &lt;retrieved memories&gt;]
+
+                                                 &lt;what she actually said&gt;&quot;} ]
+                                                 ↑ volatile content rides ONLY here
+</code></pre>
+<p><strong>Response</strong> — plain text, with a leading emotion tag:</p>
+<pre><code>[reflexiva] Me acuerdo, sí. Era invierno y vos no querías salir.
+</code></pre>
+<p>The <code>[emoción]</code> prefix is parsed off by <code>ollama_provider._parse_emotion</code> (authoritative, end of stream) and by <code>EmotionTagFilter</code> (incremental, feeds display and TTS). The tag becomes <code>state.current_emotion</code>, which drives the TTS delivery instruction and the console. There is no <code>internal_thought</code>, no <code>action</code>, no <code>should_store_memory</code> — the model returns speech and an emotion, nothing else.</p>
+<hr />
+<h3 id="3-output-pipeline">3. Output Pipeline</h3>
+<blockquote class="note note-partial">
+<p>🟡 <strong>Partial.</strong> TTS path ✅ — sanitization, Qwen3-TTS synthesis, <code>afplay</code> playback, with an overlapping streaming pipeline. Age-based voice selection 🟡 designed but not applied. Avatar generation, lip-sync, A/V sync, and projection 🔜 not built.</p>
+</blockquote>
+<figure class="diagram"><pre class="diagram-src">flowchart TB
+    subgraph LLM_OUTPUT [&quot;From Cognition&quot;]
+        SPEECH_TEXT[&quot;Response text ✅&lt;br/&gt;(streaming tokens)&quot;]
+        EMOTION_INTENT[&quot;Emotion tag ✅&lt;br/&gt;&#x27;reflexiva&#x27;&quot;]
+    end
+
+    subgraph TTS_PIPELINE [&quot;🗣️ Voice Synthesis ✅&quot;]
+        CHUNK[&quot;Sentence chunker&lt;br/&gt;(chunk_sentences: 2)&quot;]
+        SANITIZE[&quot;sanitize_for_tts()&lt;br/&gt;strip emoji/tags/actions&quot;]
+        VOICE_SELECT[&quot;Voice Selector 🟡&lt;br/&gt;(one voice today)&quot;]
+        INSTRUCT[&quot;Emotion → NL&lt;br/&gt;delivery instruction&quot;]
+        SYNTH[&quot;Qwen3-TTS ✅&quot;]
+        QUEUE[&quot;Playback queue ✅&quot;]
+    end
+
+    subgraph AVATAR_PIPELINE [&quot;🎬 Avatar Generation 🔜&quot;]
+        FACE_SELECT[&quot;Face Selector&lt;br/&gt;(age-appropriate)&quot;]
+        EMOTION_MAP[&quot;Emotion Mapper&quot;]
+        LIPSYNC[&quot;Lip Sync Engine&quot;]
+        FACE_ANIM[&quot;Face Animator&quot;]
+        VIDEO_BUFFER[&quot;Video Buffer&quot;]
+    end
+
+    subgraph SYNC [&quot;Synchronization 🔜&quot;]
+        AV_SYNC[&quot;A/V Synchronizer&quot;]
+    end
+
+    subgraph PHYSICAL [&quot;Physical Output&quot;]
+        SPEAKERS[&quot;🔊 Speakers ✅&lt;br/&gt;(afplay)&quot;]
+        PROJECTOR[&quot;📽️ Projector 🔜&lt;br/&gt;→ Smoke Screen&quot;]
+    end
+
+    SPEECH_TEXT --&gt; CHUNK --&gt; SANITIZE --&gt; SYNTH
+    EMOTION_INTENT --&gt; INSTRUCT --&gt; SYNTH
+    VOICE_SELECT -.-&gt;|&quot;age voice profile&quot;| SYNTH
+    SYNTH --&gt; QUEUE --&gt; SPEAKERS
+
+    EMOTION_INTENT -.-&gt; EMOTION_MAP -.-&gt; FACE_ANIM
+    QUEUE -.-&gt;|&quot;audio for lip sync&quot;| LIPSYNC -.-&gt; FACE_ANIM
+    FACE_SELECT -.-&gt; FACE_ANIM -.-&gt; VIDEO_BUFFER
+
+    QUEUE -.-&gt; AV_SYNC
+    VIDEO_BUFFER -.-&gt; AV_SYNC
+    AV_SYNC -.-&gt; PROJECTOR
+</pre></figure>
+<p><strong>TTS input sanitization ✅</strong> is a hard contract, not a nicety. Emojis, inline <code>[tags]</code>, and <code>*actions*</code> derail Qwen3-TTS into wrong-language output — Spanish text containing an emoji has produced CJK speech, verified by closed-loop probing. <strong>All</strong> text reaching any TTS provider passes through <code>text_filters.sanitize_for_tts()</code> first, and synthesis is skipped when it returns <code>&quot;&quot;</code>. The console still shows the original text, so the operator sees what she &quot;wrote&quot; while the speaker hears only what is speakable.</p>
+<p><strong>Critical timing constraints</strong> (targets; only the first is currently measurable):</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Target</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>TTS first chunk</td>
+<td>&lt; 500 ms</td>
+<td>✅ Met — overlapping pipeline hides most of it</td>
+</tr>
+<tr>
+<td>Lip sync calculation</td>
+<td>&lt; 50 ms</td>
+<td>🔜 Not built</td>
+</tr>
+<tr>
+<td>Face animation</td>
+<td>&lt; 100 ms/frame, 10+ FPS</td>
+<td>🔜 Not built</td>
+</tr>
+<tr>
+<td>A/V sync drift</td>
+<td>&lt; 50 ms</td>
+<td>🔜 Not built</td>
+</tr>
+</tbody>
+</table>
+</div>
+<hr />
+<h3 id="4-memory-system">4. Memory System</h3>
+<blockquote class="note note-ok">
+<p>✅ <strong>Implemented, and substantially redesigned since the original plan.</strong> Both versions are below: what runs today, and what the design still aims at.</p>
+</blockquote>
+<h4 id="4a-as-built-">4a. As built ✅</h4>
+<p>Two tiers that differ <strong>in kind</strong>, not just in retention. This is the key departure from the original design.</p>
+<figure class="diagram"><pre class="diagram-src">flowchart TB
+    subgraph TURN [&quot;Each Turn&quot;]
+        NEW[&quot;New exchange&quot;]
+    end
+
+    subgraph SHORT [&quot;Short-Term — the replayed window ✅&quot;]
+        WINDOW[&quot;conversation_history&lt;br/&gt;grows to history_max_turns: 80&quot;]
+        TRIM[&quot;Block trim → history_trim_to: 60&lt;br/&gt;(between turns, not during)&quot;]
+        JSONL[&quot;conversation_transcript.jsonl&lt;br/&gt;(crash resume)&quot;]
+    end
+
+    subgraph CONSOL [&quot;Consolidation — background, while idle ✅&quot;]
+        QUEUE[&quot;Dropped-turn queue&quot;]
+        LLMC[&quot;LLM as the character,&lt;br/&gt;at the age the block happened&quot;]
+        JUDGE{&quot;Worth&lt;br/&gt;remembering?&quot;}
+        FALLBACK[&quot;Mechanical summary&lt;br/&gt;(unparseable output)&quot;]
+    end
+
+    subgraph LONG [&quot;Long-Term — vector store ✅&quot;]
+        CHROMA[&quot;ChromaDB&lt;br/&gt;data/memory/&quot;]
+        MILESTONE[&quot;Milestones&lt;br/&gt;(auto on age transition)&quot;]
+    end
+
+    subgraph RETRIEVE [&quot;Retrieval ✅&quot;]
+        SEARCH[&quot;Semantic search&lt;br/&gt;limit 5&quot;]
+        ENVELOPE[&quot;[Contexto] envelope&lt;br/&gt;on newest message&quot;]
+    end
+
+    NEW --&gt; WINDOW
+    NEW --&gt; JSONL
+    WINDOW --&gt; TRIM
+    TRIM --&gt;|&quot;evicted turns&quot;| QUEUE
+    QUEUE --&gt; LLMC --&gt; JUDGE
+    JUDGE --&gt;|&quot;0-3 memories,&lt;br/&gt;self-scored importance&quot;| CHROMA
+    JUDGE --&gt;|&quot;NADA — nothing memorable&quot;| DISCARD[&quot;discarded&quot;]
+    JUDGE --&gt;|&quot;parse failed&quot;| FALLBACK --&gt; CHROMA
+    MILESTONE --&gt; CHROMA
+    CHROMA --&gt; SEARCH --&gt; ENVELOPE
+</pre></figure>
+<p><strong>Short-term is replayed verbatim, never searched.</strong> The window holds the recent transcript and is re-sent in full on every turn. It grows to 80 turns, then trims <strong>in one block</strong> back to 60 — not one turn at a time. A sliding window would change the prompt prefix every turn and destroy KV-cache reuse (§6).</p>
+<p><strong>Long-term is searched, never replayed wholesale.</strong> Only semantic search reaches it, with the top 5 results riding in the <code>[Contexto]</code> envelope.</p>
+<p><strong>Consolidation is the interesting part.</strong> When turns fall out of the window they are neither discarded nor stored verbatim. A background worker feeds the block back to the LLM <strong>as the character, at the age the block happened</strong>, in Spanish, asking her what she remembers of it:</p>
+<ul>
+<li>She returns <strong>0–3 first-person memories</strong>, each with a self-scored importance (0.7–1.0 for revelations, strong emotions, promises, fights; 0.4–0.6 for a significant conversation; below that is not remembered).</li>
+<li>Blocks with nothing worth keeping return <code>NADA</code> and store nothing.</li>
+<li>Unparseable output falls back to a mechanical summary rather than losing the block.</li>
+<li>Runs while she is idle, so it never delays a turn.</li>
+</ul>
+<p>The result is that long-term memory holds <em>her recollections</em>, not a transcript — better retrieval material, and dramaturgically correct: she remembers being ten the way a ten-year-old would.</p>
+<blockquote class="note">
+<p><strong>Operational requirement:</strong> run Ollama with <code>OLLAMA_NUM_PARALLEL=2</code> (<code>scripts/start_ollama.sh</code>), or the consolidation call evicts the conversation's KV-cache slot.</p>
+</blockquote>
+<p><strong>Memory record</strong> (<code>memory_type</code>: <code>interaction</code> | <code>observation</code> | <code>milestone</code> | <code>emotional</code> | <code>consolidated</code>):</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>content</code></td>
+<td>First-person recollection</td>
+</tr>
+<tr>
+<td><code>age_stage</code></td>
+<td>The age she was when it happened</td>
+</tr>
+<tr>
+<td><code>emotional_tag</code></td>
+<td>How it felt</td>
+</tr>
+<tr>
+<td><code>importance</code></td>
+<td>Self-scored 0.0–1.0 (fixed <code>0.5</code> on non-consolidated paths)</td>
+</tr>
+<tr>
+<td><code>memory_type</code></td>
+<td>Category</td>
+</tr>
+</tbody>
+</table>
+</div>
+<h4 id="4b-target-design-">4b. Target design 🔜</h4>
+<p>The original design remains the direction of travel for the parts not yet built:</p>
+<figure class="diagram"><pre class="diagram-src">flowchart TB
+    subgraph INPUTS [&quot;Memory Inputs&quot;]
+        INTERACTION[&quot;Interaction ✅&quot;]
+        EMOTIONAL[&quot;Emotional Marker ✅&lt;br/&gt;(emotional_tag)&quot;]
+        VISUAL[&quot;Visual Event 🔜&lt;br/&gt;&#x27;Actress cried&#x27;&quot;]
+    end
+
+    subgraph PROCESSING [&quot;Processing&quot;]
+        IMPORTANCE[&quot;Importance Scorer 🟡&lt;br/&gt;self-scored, unused in ranking&quot;]
+        EMBED[&quot;Embedding Generator ✅&quot;]
+    end
+
+    subgraph RETRIEVAL [&quot;Retrieval&quot;]
+        SEARCH[&quot;Semantic Search ✅&quot;]
+        RANK[&quot;Relevance + importance&lt;br/&gt;+ recency ranking 🔜&quot;]
+    end
+
+    INTERACTION --&gt; IMPORTANCE
+    EMOTIONAL --&gt; IMPORTANCE
+    VISUAL -.-&gt; IMPORTANCE
+    IMPORTANCE --&gt; EMBED --&gt; SEARCH --&gt; RANK
+</pre></figure>
+<p><strong>Still to build:</strong> visual events as a memory source (blocked on vision), and retrieval that weights importance and recency rather than ranking on semantic similarity alone. Consolidation already produces good importance scores; nothing consumes them yet.</p>
+<hr />
+<h3 id="5-age-progression-system">5. Age Progression System</h3>
+<blockquote class="note note-ok">
+<p>✅ <strong>Implemented.</strong> Time-based 8-stage progression, per-stage personality from <code>profiles/</code>, system-prompt building, milestone storage on transition, and <code>/age</code> time travel. Voice-profile switching 🟡 (paths loaded, not applied by TTS); face-profile switching 🔜 (no avatar yet).</p>
+</blockquote>
+<figure class="diagram"><pre class="diagram-src">flowchart LR
+    subgraph TIME [&quot;Time Tracker ✅&quot;]
+        CLOCK[&quot;System Clock&quot;]
+        ELAPSED[&quot;hours_elapsed&lt;br/&gt;(from performance_start_time)&quot;]
+    end
+
+    subgraph STAGE [&quot;Stage Manager ✅&quot;]
+        STAGE_CALC[&quot;Current Stage Calculator&quot;]
+        TRANSITION[&quot;Transition Detector&lt;br/&gt;→ stores milestone&quot;]
+    end
+
+    subgraph PROFILES [&quot;Age Profiles ✅&quot;]
+        P1[&quot;10-15 • curious&quot;]
+        P2[&quot;15-20 • defiant&quot;]
+        P3[&quot;20-25 • articulate&quot;]
+        P4[&quot;25-30 • confident&quot;]
+        P5[&quot;30-40 • mature&quot;]
+        P6[&quot;40-50 • reflective&quot;]
+        P7[&quot;50-60 • wise&quot;]
+        P8[&quot;60-70 • elder&quot;]
+    end
+
+    subgraph OUTPUTS [&quot;Active Configuration&quot;]
+        TRAITS[&quot;Personality traits ✅&lt;br/&gt;→ system prompt&quot;]
+        VOICE_PROFILE[&quot;Voice profile 🟡&lt;br/&gt;loaded, not applied&quot;]
+        FACE_PROFILE[&quot;Face reference 🔜&quot;]
+    end
+
+    CLOCK --&gt; ELAPSED --&gt; STAGE_CALC --&gt; TRANSITION
+    TRANSITION --&gt;|&quot;load profile&quot;| P1 &amp; P2 &amp; P3 &amp; P4 &amp; P5 &amp; P6 &amp; P7 &amp; P8
+    P1 &amp; P2 &amp; P3 &amp; P4 &amp; P5 &amp; P6 &amp; P7 &amp; P8 --&gt; TRAITS
+    P1 &amp; P2 &amp; P3 &amp; P4 &amp; P5 &amp; P6 &amp; P7 &amp; P8 -.-&gt; VOICE_PROFILE
+    P1 &amp; P2 &amp; P3 &amp; P4 &amp; P5 &amp; P6 &amp; P7 &amp; P8 -.-&gt; FACE_PROFILE
+</pre></figure>
+<p>Stages run 9 hours each across the 72-hour performance. <code>hours_elapsed</code> derives from <code>performance_start_time</code>, so <code>/age N</code> time-travels by rewriting that timestamp — rehearsing any age costs nothing and uses the same code path as the real run.</p>
+<p><strong>Note:</strong> an age transition rebuilds the system prompt, which invalidates the KV cache. This is the one unavoidable prefill spike, and it happens 8 times per performance. Accepted.</p>
+<hr />
+<h2 id="6-the-prompt-cache-contract-">6. The Prompt-Cache Contract ✅</h2>
+<blockquote class="note">
+<p>Not in the original design, and now one of the load-bearing constraints of the system. Anything that violates it costs seconds of latency on a live turn.</p>
+</blockquote>
+<p>Ollama reuses its KV cache only for a <strong>byte-identical prompt prefix</strong>. Everything below follows from that single fact:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Rule</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>System prompt is byte-stable within an age stage</td>
+<td>Any per-turn content in it invalidates the entire cache every turn</td>
+</tr>
+<tr>
+<td>Volatile content rides on the <strong>newest message only</strong></td>
+<td>Those tokens are new regardless, so nothing behind them is invalidated</td>
+</tr>
+<tr>
+<td>History stores clean text</td>
+<td>Replay stays prefix-stable across turns</td>
+</tr>
+<tr>
+<td>Emotion is <strong>output-only</strong></td>
+<td>Injecting it back into the prompt would make the prefix turn-dependent</td>
+</tr>
+<tr>
+<td>Window trims <strong>in blocks, between turns</strong></td>
+<td>A per-turn slide changes the prefix constantly</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><strong>Emotional continuity without prompt injection:</strong> <code>state.get_recent_messages()</code> re-prefixes the stored <code>[emoción]</code> tags onto replayed assistant turns. She sees her own past emotional states in the transcript, which is what maintains continuity — the tags are never added to the system prompt.</p>
+<hr />
+<h2 id="7-the-turn-cycle-">7. The Turn Cycle ✅</h2>
+<blockquote class="note note-warn">
+<p>⚠️ <strong>Corrected.</strong> The original sequence showed generation completing before speech began. The real pipeline <strong>overlaps</strong> them, and does bookkeeping between turns rather than inside them.</p>
+</blockquote>
+<figure class="diagram"><pre class="diagram-src">sequenceDiagram
+    participant W as 🌍 World
+    participant P as 👁️ Perception
+    participant O as ⚡ Orchestrator
+    participant M as 💾 Memory
+    participant L as 🧠 LLM
+    participant T as 🗣️ TTS
+    participant A as 🎬 Avatar 🔜
+
+    Note over W,A: Turn begins
+    W-&gt;&gt;P: Actress speaks
+    P-&gt;&gt;P: VAD → STT → hallucination filter
+    P-&gt;&gt;O: transcribed text
+
+    O-&gt;&gt;O: age_engine.update_state() → milestone if stage changed
+    O-&gt;&gt;O: append user turn to window + transcript.jsonl
+    O-&gt;&gt;M: semantic search (limit 5)
+    M-&gt;&gt;O: relevant memories
+    O-&gt;&gt;O: build stable system prompt + [Contexto] envelope
+
+    O-&gt;&gt;L: stream request
+    loop While generating
+        L--&gt;&gt;O: token
+        O-&gt;&gt;O: strip [emoción] / #lt;think#gt; incrementally
+        O-&gt;&gt;O: accumulate into 2-sentence chunk
+        alt Chunk complete
+            O-&gt;&gt;T: sanitize_for_tts() → synthesize
+            T-&gt;&gt;W: audio to speakers (afplay)
+            T--&gt;&gt;A: audio stream for lip sync 🔜
+        end
+    end
+    L-&gt;&gt;O: final LLMResponse (emotion, timings)
+
+    O-&gt;&gt;O: append assistant turn to window + transcript
+    Note over O,A: Turn ends — she is idle
+
+    O-&gt;&gt;O: _post_turn_maintenance(): trim at max−1
+    O-&gt;&gt;M: queue evicted turns for consolidation
+    par Background, while idle
+        O-&gt;&gt;L: _prewarm_cache() — 1-token request, discarded
+    and
+        O-&gt;&gt;L: _consolidate_block() — as the character, at that age
+        L-&gt;&gt;M: 0–3 first-person memories
+    end
+</pre></figure>
+<p><strong>Three things happen between turns, not during them</strong> — all so the cost lands in the silence rather than in her response time:</p>
+<ol>
+<li><strong>Trim at <code>max−1</code>.</strong> The window is trimmed one exchange <em>early</em>, because trimming on the next live turn would change the prefix mid-conversation and force a full re-prefill.</li>
+<li><strong>Cache prewarm.</strong> A background 1-token request re-prefills the new prefix. It waits for <code>state.is_speaking</code> to clear first, and its output is discarded.</li>
+<li><strong>Consolidation.</strong> Evicted turns are compressed into long-term memories.</li>
+</ol>
+<hr />
+<h2 id="8-persistence--resume-">8. Persistence &amp; Resume ✅</h2>
+<blockquote class="note">
+<p>Not in the original design. For a 72-hour durational piece, this is the difference between a crash being a 30-second interruption and being the end of the show.</p>
+</blockquote>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Contents</th>
+<th>On restart</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>data/performance_state.json</code></td>
+<td><code>performance_start_time</code>, phase</td>
+<td>Resumes at the correct age if still inside 72h</td>
+</tr>
+<tr>
+<td><code>data/conversation_transcript.jsonl</code></td>
+<td>Every turn: role, content, emotion, timestamp, speaker_id</td>
+<td>Rebuilds the short-term window</td>
+</tr>
+<tr>
+<td><code>data/memory/</code></td>
+<td>ChromaDB vector store</td>
+<td>Persistent by nature</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><code>--fresh</code> ignores saved state and starts at hour 0.</p>
+<hr />
+<h2 id="9-proactive-conversation-initiation">9. Proactive Conversation Initiation</h2>
+<blockquote class="note note-planned">
+<p>🔜 <strong>Planned. Nothing exists.</strong> There is no <code>proactive:</code> config block and no initiation code anywhere in <code>src/</code>. She responds only when spoken to. (An earlier version of this document described a config block and task stub — that was inaccurate.)</p>
+</blockquote>
+<p><strong>Attachment point:</strong> a decision step ahead of <code>process_input_streaming</code>, driven by <code>state.last_interaction_time</code> and the memory store. Both already exist.</p>
+<figure class="diagram"><pre class="diagram-src">flowchart TB
+    subgraph TRIGGERS [&quot;Initiation Triggers 🔜&quot;]
+        SILENCE[&quot;Silence Timer&lt;br/&gt;(&gt; X seconds)&quot;]
+        VISUAL_CUE[&quot;Visual Cue&lt;br/&gt;(actress looks at camera)&quot;]
+        EMOTIONAL[&quot;Emotional Event&lt;br/&gt;(actress crying)&quot;]
+        SCHEDULED[&quot;Scheduled Beat&lt;br/&gt;(narrative moment)&quot;]
+        RANDOM[&quot;Random Interval&lt;br/&gt;(liveliness)&quot;]
+    end
+
+    subgraph DECISION [&quot;Initiation Decision 🔜&quot;]
+        SHOULD[&quot;Should Speak?&quot;]
+        URGENCY[&quot;Urgency Level&quot;]
+        TOPIC[&quot;Topic Selection&quot;]
+    end
+
+    subgraph GENERATION [&quot;Response Generation&quot;]
+        MEM_PROMPT[&quot;Pull memories for topic&lt;br/&gt;(retrieval exists ✅)&quot;]
+        LLM_INIT[&quot;LLM generates&lt;br/&gt;opening statement&quot;]
+    end
+
+    SILENCE --&gt; SHOULD
+    VISUAL_CUE --&gt; SHOULD
+    EMOTIONAL --&gt; SHOULD
+    SCHEDULED --&gt; SHOULD
+    RANDOM --&gt; SHOULD
+
+    SHOULD --&gt;|&quot;yes&quot;| URGENCY --&gt; TOPIC --&gt; MEM_PROMPT --&gt; LLM_INIT
+</pre></figure>
+<hr />
+<h2 id="10-failure--recovery">10. Failure &amp; Recovery</h2>
+<blockquote class="note note-planned">
+<p>🔜 <strong>Planned.</strong> No watchdog, heartbeat, or automatic recovery exists. Persistence (§8) means a manual restart is cheap, but nothing currently <em>notices</em> a hang or a wedged Ollama. Critical before any unattended 72-hour run.</p>
+<p><strong>Partial mitigation that does exist:</strong> the <code>system</code> TTS provider (macOS <code>say</code>) is config-selectable, so a failed Qwen3-TTS load can be dropped to it — degraded voice rather than silence. It has no model to load and no dependency to install, so it cannot fail the same way. Nothing switches automatically.</p>
+</blockquote>
+<figure class="diagram"><pre class="diagram-src">flowchart TB
+    subgraph WATCHDOG [&quot;System Watchdog 🔜&quot;]
+        HEALTH[&quot;Health Monitor&quot;]
+        HEARTBEAT[&quot;Heartbeat Check&lt;br/&gt;(every 5s)&quot;]
+    end
+
+    subgraph FAILURES [&quot;Possible Failures&quot;]
+        LLM_FAIL[&quot;LLM Hang/Crash&quot;]
+        TTS_FAIL[&quot;TTS Failure&quot;]
+        AVATAR_FAIL[&quot;Avatar Crash 🔜&quot;]
+        MEMORY_FAIL[&quot;Memory DB Issue&quot;]
+    end
+
+    subgraph RECOVERY [&quot;Recovery Actions&quot;]
+        RESTART[&quot;Restart Component&quot;]
+        FALLBACK[&quot;Use Fallback&lt;br/&gt;(simpler model) 🟡&quot;]
+        GRACEFUL[&quot;Graceful Degradation&lt;br/&gt;(voice only, no face)&quot;]
+        ALERT[&quot;Alert Technician&quot;]
+        LOG[&quot;Log Everything ✅&quot;]
+    end
+
+    HEALTH --&gt; HEARTBEAT
+    HEARTBEAT --&gt; LLM_FAIL &amp; TTS_FAIL &amp; AVATAR_FAIL &amp; MEMORY_FAIL
+
+    LLM_FAIL --&gt; RESTART
+    LLM_FAIL --&gt;|&quot;repeated&quot;| FALLBACK
+    TTS_FAIL --&gt; RESTART
+    TTS_FAIL --&gt; FALLBACK
+    AVATAR_FAIL --&gt; GRACEFUL
+    MEMORY_FAIL --&gt; LOG
+    MEMORY_FAIL --&gt;|&quot;continue without&quot;| GRACEFUL
+
+    RESTART --&gt; ALERT
+    FALLBACK --&gt; ALERT
+    GRACEFUL --&gt; ALERT
+</pre></figure>
+<p><strong>Known issue:</strong> <code>main()</code> ends with <code>os._exit(0)</code> to force-kill the blocking <code>input()</code> executor thread — a normal return will not shut the process down. This produces a benign leaked-semaphore warning at exit. Acceptable in development, worth resolving before an unattended run.</p>
+<hr />
+<h2 id="11-code-map">11. Code Map</h2>
+<p>Where each concept in this document lives:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Concept</th>
+<th>Location</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Turn cycle</td>
+<td><code>orchestrator.process_input_streaming</code></td>
+</tr>
+<tr>
+<td>Streaming + TTS overlap</td>
+<td><code>orchestrator._stream_and_speak</code>, <code>_tts_consumer</code></td>
+</tr>
+<tr>
+<td>Context envelope</td>
+<td><code>orchestrator._wrap_with_context</code></td>
+</tr>
+<tr>
+<td>Memory retrieval</td>
+<td><code>orchestrator._build_memory_context</code></td>
+</tr>
+<tr>
+<td>Consolidation</td>
+<td><code>orchestrator._consolidation_worker</code>, <code>_consolidate_block</code></td>
+</tr>
+<tr>
+<td>Between-turn maintenance</td>
+<td><code>orchestrator._post_turn_maintenance</code>, <code>_prewarm_cache</code></td>
+</tr>
+<tr>
+<td>Persistence</td>
+<td><code>orchestrator._append_transcript</code>, <code>_load_transcript</code>, <code>_persist_performance_state</code></td>
+</tr>
+<tr>
+<td>Voice mode + VAD + filtering</td>
+<td><code>orchestrator.run_voice_mode</code></td>
+</tr>
+<tr>
+<td>Slash commands</td>
+<td><code>orchestrator._handle_command</code> — <code>/help</code> <code>/status</code> <code>/memory</code> <code>/age N</code> <code>/lobotomy</code> <code>/quit</code></td>
+</tr>
+<tr>
+<td>System prompt building</td>
+<td><code>age_engine.build_personality_prompt</code></td>
+</tr>
+<tr>
+<td>State, window, trimming</td>
+<td><code>state.ActorState</code>, <code>get_recent_messages</code>, <code>trim_history</code></td>
+</tr>
+<tr>
+<td>Emotion parsing</td>
+<td><code>ollama_provider._parse_emotion</code>, <code>text_filters.EmotionTagFilter</code></td>
+</tr>
+<tr>
+<td>TTS sanitization</td>
+<td><code>text_filters.sanitize_for_tts</code></td>
+</tr>
+<tr>
+<td>Provider selection</td>
+<td><code>registry.py</code></td>
+</tr>
+</tbody>
+</table>
+</div>
+<hr />
+<h2 id="physical-setup-diagram">Physical Setup Diagram</h2>
+<blockquote class="note note-planned">
+<p>🔜 <strong>Planned.</strong> Venue layout for the full installation. Only the microphone, speakers, and main machine are in use today.</p>
+</blockquote>
+<pre><code>┌────────────────────────────────────────────────────────────────────────────┐
+│                           PERFORMANCE SPACE                                 │
+│                                                                            │
+│    ┌──────────┐                                      ┌──────────────┐     │
+│    │ CAMERA 1 │◄─────────────────────────────────────│   AUDIENCE   │     │
+│    │ (wide)🔜 │                                      │              │     │
+│    └──────────┘                                      └──────────────┘     │
+│                                                                            │
+│                        ┌─────────────────────┐                            │
+│                        │                     │                            │
+│    ┌──────────┐        │    SMOKE SCREEN     │        ┌──────────┐       │
+│    │ CAMERA 2 │◄───────│  (AI FACE PROJ) 🔜  │───────►│PROJECTOR │       │
+│    │ (close)🔜│        │                     │        │    🔜    │       │
+│    └──────────┘        └─────────────────────┘        └──────────┘       │
+│                                    ▲                                       │
+│                                    │                                       │
+│                              ┌─────┴─────┐                                │
+│          ┌────────┐         │           │         ┌────────┐             │
+│          │  MIC ✅│         │  ACTRESS  │         │SPEAKERS│             │
+│          │(lapel) │◄────────│           │────────►│(stereo)│             │
+│          └────────┘         │           │         └───✅───┘             │
+│                             └───────────┘                                 │
+│                                                                            │
+│    ┌───────────────────────────────────────────────────────────────┐     │
+│    │                    TECH BOOTH (hidden)                         │     │
+│    │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐      │     │
+│    │  │ MAIN PC ✅│  │ BACKUP 🔜│  │ AUDIO 🔜 │  │ MONITOR🔜│      │     │
+│    │  │(M4 Pro)  │  │ SYSTEM   │  │ MIXER    │  │ STATION  │      │     │
+│    │  └──────────┘  └──────────┘  └──────────┘  └──────────┘      │     │
+│    └───────────────────────────────────────────────────────────────┘     │
+└────────────────────────────────────────────────────────────────────────────┘
+</code></pre>
+
+    <footer>Generated from ARCHITECTURE.md by scripts/build_architecture_html.py</footer>
+  </main>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/11.4.0/mermaid.min.js"></script>
+<script>
+(function () {
+  var details = document.querySelector(".toc details");
+  if (details && window.matchMedia("(max-width: 920px)").matches) details.open = false;
+
+  var figures = Array.prototype.slice.call(document.querySelectorAll("figure.diagram"));
+  if (!figures.length || !window.mermaid) return;  // no network: the source stays visible
+
+  var sources = figures.map(function (fig) {
+    return fig.querySelector(".diagram-src").textContent;
+  });
+  var root = document.documentElement;
+  var media = window.matchMedia("(prefers-color-scheme: dark)");
+
+  function token(name) { return getComputedStyle(root).getPropertyValue(name).trim(); }
+  function isDark() {
+    var theme = root.getAttribute("data-theme");
+    return theme ? theme === "dark" : media.matches;
+  }
+
+  // Diagrams take their colours from the page tokens, so they follow the
+  // light/dark theme. Re-rendered whenever the theme changes.
+  var generation = 0;
+  function render() {
+    var current = ++generation;
+    window.mermaid.initialize({
+      startOnLoad: false,
+      securityLevel: "strict",
+      theme: "base",
+      darkMode: isDark(),
+      fontFamily: token("--sans"),
+      flowchart: { htmlLabels: true, curve: "basis" },
+      themeVariables: {
+        fontFamily: token("--sans"),
+        fontSize: "14px",
+        background: token("--surface"),
+        primaryColor: token("--surface"),
+        primaryTextColor: token("--ink"),
+        primaryBorderColor: token("--muted"),
+        secondaryColor: token("--accent-soft"),
+        tertiaryColor: token("--surface-2"),
+        lineColor: token("--muted"),
+        textColor: token("--ink"),
+        mainBkg: token("--surface"),
+        nodeBorder: token("--muted"),
+        clusterBkg: token("--bg"),
+        clusterBorder: token("--line"),
+        titleColor: token("--ink"),
+        edgeLabelBackground: token("--surface"),
+        actorBkg: token("--surface"),
+        actorBorder: token("--muted"),
+        actorTextColor: token("--ink"),
+        actorLineColor: token("--line"),
+        signalColor: token("--ink"),
+        signalTextColor: token("--ink"),
+        labelBoxBkgColor: token("--surface-2"),
+        labelBoxBorderColor: token("--line"),
+        labelTextColor: token("--ink"),
+        loopTextColor: token("--ink"),
+        noteBkgColor: token("--warm-soft"),
+        noteBorderColor: token("--warm"),
+        noteTextColor: token("--ink"),
+        activationBkgColor: token("--accent-soft"),
+        activationBorderColor: token("--accent")
+      }
+    });
+    figures.forEach(function (fig, i) {
+      window.mermaid.render("arch-diagram-" + i + "-" + current, sources[i])
+        .then(function (out) { if (current === generation) fig.innerHTML = out.svg; })
+        .catch(function () { /* leave the previous rendering (or the source) in place */ });
+    });
+  }
+
+  render();
+  if (media.addEventListener) media.addEventListener("change", render);
+  new MutationObserver(render).observe(root, { attributes: true, attributeFilter: ["data-theme"] });
+})();
+</script>
