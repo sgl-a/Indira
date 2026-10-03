@@ -79,6 +79,21 @@ _EMOTION_INSTRUCTIONS = {
     "calm": "Speak calmly and peacefully",
 }
 
+# Runaway guard. Sampling occasionally misses the end-of-speech token and the
+# model babbles until mlx-audio's default cap of 4096 frames — 5.5 minutes of
+# noise for a one-line reply (seen live, 2026-10-02; not reproducible on
+# demand, so it isn't tied to any particular text). The codec runs at 12.5
+# frames/s and real speech for this voice measured 9-13 chars/s, never above
+# 1.7 frames per char, so 3 frames per char never clips a real line but stops
+# a runaway within seconds.
+_FRAMES_PER_CHAR_CAP = 3
+_MIN_FRAMES = 50  # ~4 s, so very short lines ("Sí.") still have room
+_ATTEMPTS = 2
+
+
+class TTSRunawayError(RuntimeError):
+    """Every attempt hit the length cap: there is no clean audio to play."""
+
 
 class QwenTTSProvider(TTSProvider):
     """
@@ -146,14 +161,30 @@ class QwenTTSProvider(TTSProvider):
         # Build emotion instruction for CustomVoice instruct
         instruct = self._get_emotion_instruction(emotion)
 
-        # Run synthesis in executor (MLX operations can block)
+        # Run synthesis in executor (MLX operations can block). A run that hits
+        # the length cap is a runaway: discard it and resample. If every
+        # attempt runs away, raise — callers skip the line, and silence is
+        # better than noise mid-performance.
+        max_frames = int(max(_MIN_FRAMES, len(text) * _FRAMES_PER_CHAR_CAP))
         loop = asyncio.get_event_loop()
-        audio_array, sample_rate = await loop.run_in_executor(
-            None,
-            self._generate_audio,
-            text,
-            instruct,
-        )
+        for attempt in range(1, _ATTEMPTS + 1):
+            audio_array, sample_rate, frames = await loop.run_in_executor(
+                None,
+                self._generate_audio,
+                text,
+                instruct,
+                max_frames,
+            )
+            if frames < max_frames:
+                break
+            logger.warning(
+                f"Qwen3-TTS runaway (hit {max_frames}-frame cap), "
+                f"attempt {attempt}/{_ATTEMPTS}: {text[:60]!r}"
+            )
+        else:
+            raise TTSRunawayError(
+                f"TTS ran away on all {_ATTEMPTS} attempts; skipping this line"
+            )
 
         # Convert to WAV bytes
         buf = io.BytesIO()
@@ -175,8 +206,15 @@ class QwenTTSProvider(TTSProvider):
             generation_time_ms=generation_time,
         )
 
-    def _generate_audio(self, text: str, instruct: str) -> tuple[np.ndarray, int]:
-        """Synchronous audio generation via Qwen3-TTS CustomVoice."""
+    def _generate_audio(
+        self, text: str, instruct: str, max_frames: int
+    ) -> tuple[np.ndarray, int, int]:
+        """
+        Synchronous audio generation via Qwen3-TTS CustomVoice.
+
+        Returns (audio, sample_rate, frames generated); frames reaching
+        `max_frames` means the model never stopped on its own.
+        """
         import mlx.core as mx
 
         if not self._model:
@@ -192,6 +230,7 @@ class QwenTTSProvider(TTSProvider):
             speaker=self._voice,
             language=self._lang_code,
             instruct=instruct,
+            max_tokens=max_frames,
             verbose=False,
             stream=False,
         )
@@ -199,8 +238,10 @@ class QwenTTSProvider(TTSProvider):
         # Collect all audio chunks
         audio_chunks = []
         sample_rate = getattr(self._model, "sample_rate", 24000)
+        frames = 0
 
         for result in results:
+            frames += result.token_count
             audio = result.audio
             if hasattr(audio, "tolist"):
                 # Convert mlx array to numpy
@@ -216,7 +257,7 @@ class QwenTTSProvider(TTSProvider):
         else:
             full_audio = np.array([], dtype=np.float32)
 
-        return full_audio.flatten(), sample_rate
+        return full_audio.flatten(), sample_rate, frames
 
     def _get_emotion_instruction(self, emotion: str | None) -> str:
         """Map LLM emotion tag to TTS instruction."""

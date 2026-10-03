@@ -40,8 +40,7 @@ class AgeStage:
     vocabulario: str | None = None
     mirada: dict | None = None  # nota / lee / rompe_el_silencio
     ya_no: list[str] | None = None
-    circunstancias_dadas: list[str] | None = None
-    muestras: list[dict] | None = None  # situacion / ximena|otro / indira
+    vida_a_esta_edad: list[str] | None = None
     voice_profile_path: str | None = None
     face_profile_path: str | None = None
 
@@ -86,8 +85,7 @@ class AgeEngine:
                 stage.vocabulario = profile.get("vocabulario")
                 stage.mirada = profile.get("mirada")
                 stage.ya_no = profile.get("ya_no", [])
-                stage.circunstancias_dadas = profile.get("circunstancias_dadas", [])
-                stage.muestras = profile.get("muestras", [])
+                stage.vida_a_esta_edad = profile.get("vida_a_esta_edad", [])
 
                 # Voice and face files
                 voice_path = profile_dir / "voice_reference.wav"
@@ -167,8 +165,7 @@ class AgeEngine:
 
         Section order is deliberate: objective (what she wants) first so it
         colours everything read after it, then who she is, then how she
-        perceives, and dialogue exemplars last — closest to generation, where
-        few-shot anchoring does the most work against persona drift.
+        perceives, then what she has left behind and what already happened.
 
         Deliberately contains ONLY per-stage-stable content: Ollama reuses
         its KV cache for the byte-identical prompt prefix across requests,
@@ -217,8 +214,8 @@ class AgeEngine:
         # No abstract trait list here by design: a line like "encontrás alegría
         # en cosas mínimas" never tells her what to do when something happens,
         # and it is the field that flattens into the model's default warm-
-        # wisdom register. Character is carried by the objective, the tactics,
-        # ritmo/vocabulario and the exemplars instead.
+        # wisdom register. Character is carried by the objective, the tactics
+        # and ritmo/vocabulario instead.
         if stage.ritmo:
             prompt_parts.extend(["", f"**Tu ritmo al hablar:** {_flat(stage.ritmo)}"])
 
@@ -248,35 +245,18 @@ class AgeEngine:
                 prompt_parts.append(f"- {gone}")
 
         # Given circumstances (Hagen 5): 72 real hours hold 60 fictional years,
-        # so most of her life happens in the gaps between stages. This names
-        # what was already true when the stage opened. Empty until written.
-        if stage.circunstancias_dadas:
-            prompt_parts.extend(["", "## Lo que ya pasó"])
-            for fact in stage.circunstancias_dadas:
-                prompt_parts.append(f"- {fact}")
-
-        # Exemplars last before the format contract: few-shot dialogue anchors
-        # voice far harder than trait lists, and sitting near the end keeps it
-        # close to generation. Marked hard as examples — anything echoed
-        # verbatim goes straight out the speaker.
-        if stage.muestras:
+        # so most of her life happens in the gaps between stages. The company
+        # writes these as a mix of what she brings into the stage and what she
+        # is going through during it, mostly in the present tense, so the
+        # heading frames both rather than only the past.
+        if stage.vida_a_esta_edad:
             prompt_parts.extend([
                 "",
-                "## Ejemplos de cómo sonás",
-                "Muestran tu registro a esta edad. No son líneas para repetir:",
-                "nunca las digas textual.",
+                "## Tu vida a esta edad",
+                "Lo que traés y lo que estás atravesando en estos años.",
             ])
-            for sample in stage.muestras:
-                if not sample.get("indira"):
-                    continue
-                prompt_parts.append("")
-                if sample.get("situacion"):
-                    prompt_parts.append(f"({sample['situacion']})")
-                if sample.get("ximena"):
-                    prompt_parts.append(f"Mamá: {sample['ximena']}")
-                elif sample.get("otro"):
-                    prompt_parts.append(f"Otra persona: {sample['otro']}")
-                prompt_parts.append(f"Vos: {sample['indira']}")
+            for fact in stage.vida_a_esta_edad:
+                prompt_parts.append(f"- {fact}")
 
         # Emotion tag — kept for TTS pipeline, presented as brief formatting note
         prompt_parts.extend([

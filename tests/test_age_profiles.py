@@ -22,15 +22,14 @@ PROFILE_DIRS = [
     "age_30_40", "age_40_50", "age_50_60", "age_60_70",
 ]
 
-# `muestras` is deliberately absent: exemplars are optional per stage. Every
-# other field is load-bearing, and a typo in any of these key names produces a
-# prompt that is missing a whole section with no error anywhere.
+# Every field here is load-bearing, and a typo in any of these key names
+# produces a prompt that is missing a whole section with no error anywhere.
 #
 # `ya_no` is handled separately — it is required from the second stage on, but
 # the first has nothing prior to have stopped doing.
 REQUIRED = [
     "motor_dramatico", "cree_de_ximena", "estado_base",
-    "ritmo", "vocabulario", "mirada", "circunstancias_dadas",
+    "ritmo", "vocabulario", "mirada", "vida_a_esta_edad",
 ]
 
 
@@ -79,25 +78,6 @@ def test_mirada_is_complete(name):
         assert mirada.get(key), f"{name}: mirada.{key} is empty"
 
 
-@pytest.mark.parametrize("name", PROFILE_DIRS)
-def test_muestras_are_well_formed(name):
-    """
-    Exemplars are optional — a stage may ship none. But a malformed one renders
-    into the prompt silently, so any stage that does write them is still checked.
-    """
-    muestras = _profile(name).get("muestras")
-    if not muestras:
-        pytest.skip(f"{name} ships no exemplars")
-    for i, sample in enumerate(muestras):
-        assert sample.get("situacion"), f"{name}[{i}]: no situacion"
-        assert sample.get("ximena") or sample.get("otro"), f"{name}[{i}]: no opening line"
-        assert sample.get("indira"), f"{name}[{i}]: no reply"
-        assert sample["indira"].lstrip().startswith("["), (
-            f"{name}[{i}]: reply must carry an [emoción] tag — the exemplars are "
-            "what keep the tag protocol reinforced"
-        )
-
-
 def test_objectives_are_all_different():
     """Description saturates across a lifetime; desire is the axis that doesn't."""
     wants = [_profile(n)["motor_dramatico"]["quiere"] for n in PROFILE_DIRS]
@@ -140,20 +120,3 @@ def test_prompt_carries_the_profile_content():
     assert profile["cree_de_ximena"] in prompt
     assert profile["motor_dramatico"]["tacticas"][0] in prompt
     assert profile["ya_no"][0] in prompt
-
-    if profile.get("muestras"):
-        assert profile["muestras"][0]["indira"] in prompt
-        # Exemplars must be labelled, or the model echoes them and they hit the speaker
-        assert "no son líneas para repetir" in prompt.lower()
-
-
-def test_prompt_renders_non_ximena_interlocutors():
-    """Visitors may speak to her; those exemplars must not be labelled 'Mamá'."""
-    muestras = _profile("age_15_20").get("muestras") or []
-    if not any(sample.get("otro") for sample in muestras):
-        pytest.skip("age_15_20 ships no non-Ximena exemplar")
-
-    config = get_config()
-    engine = AgeEngine(config)
-    prompt = engine.build_personality_prompt(_state_at(12.0), config)
-    assert "Otra persona:" in prompt

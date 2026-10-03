@@ -17,7 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 whisper = ["mlx-whisper>=0.4"]   # STT — Apple Silicon native
-tts = ["mlx-audio>=0.4"]         # TTS — runs the Qwen3-TTS MLX models
+tts = ["mlx-audio[tts]>=0.5.7"]  # TTS — runs the Qwen3-TTS MLX models; 0.5.x + [tts] also brings Voxtral TTS, Chatterbox, etc.
 memory = [
     "chromadb>=1.5",
     "ollama>=0.6",  # client used by Chroma's OllamaEmbeddingFunction (memory.embedding_model)
