@@ -15,13 +15,48 @@ Requirements:
 import asyncio
 import functools
 import logging
+import re
 import time
+import unicodedata
 
 import numpy as np
 
 from src.core.interfaces.stt import STTProvider, TranscriptionResult
 
 logger = logging.getLogger(__name__)
+
+# Whisper hallucinates on non-speech: a clap or a lighter click comes back as
+# "¡Suscríbete!", a line from the subtitled videos it was trained on. Two
+# filters, both here because they're Whisper's quirks, not the conversation's:
+#
+# 1. Whisper's own no-speech probability, per segment. Measured 2026-10-16:
+#    claps / lighter clicks 0.79-0.85; real short answers 0.09-0.18 (short
+#    answers in the TTS voice up to 0.56). Its avg_logprob does NOT separate
+#    them — a real "¿Sí?" scored lower than the hallucinations — which is why
+#    Whisper's built-in skip (no_speech AND low logprob) lets them through.
+# 2. Its stock phrases, matched against the WHOLE transcription. A substring
+#    match (the old filter in voice mode) dropped real lines such as
+#    "me encanta esta música".
+_DEFAULT_NO_SPEECH_THRESHOLD = 0.7
+
+
+def _normalize(text: str) -> str:
+    """Lowercase, no accents or punctuation: '¡Suscríbete!' → 'suscribete'."""
+    text = unicodedata.normalize("NFKD", text.lower())
+    text = "".join(c for c in text if not unicodedata.combining(c))
+    return " ".join(re.sub(r"[^\w\s]", " ", text).split())
+
+
+_STOCK_PHRASES = {_normalize(p) for p in (
+    "¡Suscríbete!", "Suscríbete al canal", "Subscribe",
+    "Gracias por ver", "Gracias por ver el video",
+    "Thank you.", "Thanks for watching!", "Thank you for watching!",
+    "Subtítulos realizados por la comunidad de Amara.org",
+    "Subtítulos por la comunidad de Amara.org",
+    "Música", "Aplausos", "Risas",
+)}
+# Never part of real dialogue, so safe to match anywhere in the text
+_STOCK_MARKERS = ("amara org",)
 
 # Model size → HuggingFace repo mapping
 _MODEL_REPOS = {
@@ -54,12 +89,16 @@ class WhisperSTTProvider(STTProvider):
     def __init__(self):
         self._model_repo: str = "mlx-community/whisper-base"
         self._language: str | None = None
+        self._no_speech_threshold: float = _DEFAULT_NO_SPEECH_THRESHOLD
         self._mlx_whisper = None
 
     async def initialize(self, config: dict) -> None:
         stt_config = config.get("stt", config)
         model_name = stt_config.get("model", "base")
         self._language = stt_config.get("language", None)
+        self._no_speech_threshold = stt_config.get(
+            "no_speech_threshold", _DEFAULT_NO_SPEECH_THRESHOLD
+        )
 
         # Resolve model name to HF repo
         if model_name in _MODEL_REPOS:
@@ -111,7 +150,7 @@ class WhisperSTTProvider(STTProvider):
         )
 
         elapsed = (time.time() - start_time) * 1000
-        text = result.get("text", "").strip()
+        text = self._speech_text(result)
         language = result.get("language", "en")
 
         if text:
@@ -125,6 +164,29 @@ class WhisperSTTProvider(STTProvider):
             language=language,
             is_final=True,
         )
+
+    def _speech_text(self, result: dict) -> str:
+        """The transcription minus what Whisper hallucinated (see top of module)."""
+        segments = result.get("segments")
+        if segments is None:
+            text = result.get("text", "").strip()
+        else:
+            kept = []
+            for seg in segments:
+                if seg.get("no_speech_prob", 0.0) > self._no_speech_threshold:
+                    logger.debug(
+                        f"🎤 STT dropped non-speech (no_speech_prob "
+                        f"{seg['no_speech_prob']:.2f}): {seg.get('text', '').strip()!r}"
+                    )
+                else:
+                    kept.append(seg.get("text", ""))
+            text = "".join(kept).strip()
+
+        normalized = _normalize(text)
+        if normalized in _STOCK_PHRASES or any(m in normalized for m in _STOCK_MARKERS):
+            logger.debug(f"🎤 STT dropped Whisper stock phrase: {text!r}")
+            return ""
+        return text
 
     async def shutdown(self) -> None:
         self._mlx_whisper = None

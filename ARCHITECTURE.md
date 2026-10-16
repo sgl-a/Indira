@@ -122,7 +122,7 @@ flowchart TB
 
 ### 1. Perception Pipeline
 
-> 🟡 **Partial.** Audio path ✅ — mic capture, energy-based VAD with pre-roll, mlx-whisper STT, and anti-hallucination filtering (`orchestrator.run_voice_mode`, around lines 986–1034). Vision path 🔜 not built. **Speaker identification is not implemented** — `TranscriptionResult.speaker_id` and `ConversationTurn.speaker_id` exist and are plumbed through persistence, but nothing populates them.
+> 🟡 **Partial.** Audio path ✅ — mic capture, energy-based VAD with two thresholds and pre-roll (`vad.EndpointDetector`), mlx-whisper STT with anti-hallucination filtering (`WhisperSTTProvider`), and noise gates (`orchestrator.run_voice_mode`). Vision path 🔜 not built. **Speaker identification is not implemented** — `TranscriptionResult.speaker_id` and `ConversationTurn.speaker_id` exist and are plumbed through persistence, but nothing populates them.
 
 ```mermaid
 flowchart LR
@@ -139,7 +139,7 @@ flowchart LR
     end
 
     subgraph AUDIO ["Audio Processing"]
-        VAD["Voice Activity ✅\n(energy + preroll)"]
+        VAD["Voice Activity ✅\n(energy, start/keep + preroll)"]
         STT["Whisper STT ✅"]
         FILTER["Hallucination ✅\nFilter"]
         SPEAKER_ID["Speaker ID 🔜"]
@@ -155,9 +155,11 @@ flowchart LR
     FILTER -.-> SPEAKER_ID -.-> SPEECH_CTX
 ```
 
-**Anti-hallucination filtering** is worth noting because it is not in the original design. Whisper emits characteristic phantom phrases on silence or noise ("thank you for watching", subtitle credits). These are filtered before reaching the orchestrator — without it, room noise generates conversational turns and the character responds to nobody.
+**Anti-hallucination filtering** is worth noting because it is not in the original design. Whisper emits characteristic phantom phrases on silence or noise — forced to Spanish, a clap or a lighter click comes back as "¡Suscríbete!". Without filtering, room noise generates conversational turns and the character responds to nobody. The filter lives in the Whisper provider (`WhisperSTTProvider._speech_text`), since it's Whisper's quirk: it drops segments Whisper itself rates as non-speech (`no_speech_prob` above `stt.no_speech_threshold`, 0.7 — measured claps 0.79–0.85 vs real short answers ≤0.56), and drops its stock phrases only when they are the *whole* transcription, so real dialogue that contains one ("me encanta esta música") survives.
 
-**Audio parameters** (`config/default.yaml`): 16 kHz mono, `energy_threshold 0.03`, `silence_duration_ms 800`, `preroll_ms 300`. Language pinned to `es`.
+**Turn detection uses two thresholds.** A turn starts when a 100 ms block is louder than `energy_threshold`, but once she's listening only blocks quieter than the lower `keep_threshold` count as silence. With a single threshold, soft syllables and a dropping voice counted as silence and the speaker was cut off mid-sentence. The noise gates (minimum duration, minimum energy) judge only the speech itself, without the pre-roll and trailing silence, so a short, soft "sí" isn't discarded. Levels depend on the mic, its input volume and the room, so they must be calibrated on the show rig.
+
+**Audio parameters** (`config/default.yaml`, calibrated 2026-10-15 on the MacBook's built-in mic): 16 kHz mono, `energy_threshold 0.01`, `keep_threshold 0.005`, `silence_duration_ms 1200` (800 cut a measured ~1 s mid-sentence pause), `max_turn_ms 60000` (safety valve if room noise sits above `keep_threshold`), `preroll_ms 300`. Language pinned to `es`.
 
 ---
 
@@ -251,7 +253,7 @@ flowchart TB
     end
 
     subgraph TTS_PIPELINE ["🗣️ Voice Synthesis ✅"]
-        CHUNK["Sentence chunker\n(chunk_sentences: 2)"]
+        CHUNK["TTSChunker\n(one sentence per chunk)"]
         SANITIZE["sanitize_for_tts()\nstrip emoji/tags/actions"]
         VOICE_SELECT["Voice Selector 🟡\n(one voice today)"]
         INSTRUCT["Emotion → NL\ndelivery instruction"]
@@ -291,6 +293,8 @@ flowchart TB
 ```
 
 **TTS input sanitization ✅** is a hard contract, not a nicety. Emojis, inline `[tags]`, and `*actions*` derail Qwen3-TTS into wrong-language output — Spanish text containing an emoji has produced CJK speech, verified by closed-loop probing. **All** text reaching any TTS provider passes through `text_filters.sanitize_for_tts()` first, and synthesis is skipped when it returns `""`. The console still shows the original text, so the operator sees what she "wrote" while the speaker hears only what is speakable.
+
+**Chunking ✅.** With `tts.streaming` on, `text_filters.TTSChunker` cuts the streamed reply at every sentence end, so the first sentence plays while the rest is still being generated. It never cuts inside a `[tag]` or `*action*` (sanitization strips whole spans only — half a span would be spoken), and a run with no punctuation is cut at a space after `tts.chunk_max_chars`. Cutting long sentences at commas is built but off (`tts.chunk_comma_min_chars: 0`): in probing, chunks ending mid-sentence sometimes made Qwen3-TTS keep talking past the comma.
 
 **Critical timing constraints** (targets; only the first is currently measurable):
 
@@ -502,7 +506,7 @@ sequenceDiagram
     loop While generating
         L-->>O: token
         O->>O: strip [emoción] / <think> incrementally
-        O->>O: accumulate into 2-sentence chunk
+        O->>O: TTSChunker: cut at each sentence end
         alt Chunk complete
             O->>T: sanitize_for_tts() → synthesize
             T->>W: audio to speakers (afplay)
@@ -645,12 +649,15 @@ Where each concept in this document lives:
 | Consolidation | `orchestrator._consolidation_worker`, `_consolidate_block` |
 | Between-turn maintenance | `orchestrator._post_turn_maintenance`, `_prewarm_cache` |
 | Persistence | `orchestrator._append_transcript`, `_load_transcript`, `_persist_performance_state` |
-| Voice mode + VAD + filtering | `orchestrator.run_voice_mode` |
+| Voice mode + noise gates | `orchestrator.run_voice_mode` |
+| Hallucination filter (Whisper) | `whisper_provider.WhisperSTTProvider._speech_text` |
+| VAD (turn start/end) | `vad.EndpointDetector` |
 | Slash commands | `orchestrator._handle_command` — `/help` `/status` `/memory` `/age N` `/lobotomy` `/quit` |
 | System prompt building | `age_engine.build_personality_prompt` |
 | State, window, trimming | `state.ActorState`, `get_recent_messages`, `trim_history` |
 | Emotion parsing | `ollama_provider._parse_emotion`, `text_filters.EmotionTagFilter` |
 | TTS sanitization | `text_filters.sanitize_for_tts` |
+| TTS chunking | `text_filters.TTSChunker` |
 | Provider selection | `registry.py` |
 
 ---

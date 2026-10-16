@@ -21,7 +21,8 @@ from typing import Any, AsyncIterator
 
 from src.core.audio_output import WavPlayback
 from src.core.logging_utils import defer_console_logs, flush_console_logs
-from src.core.text_filters import EmotionTagFilter, sanitize_for_tts
+from src.core.text_filters import EmotionTagFilter, TTSChunker, sanitize_for_tts
+from src.core.vad import EndpointDetector
 from src.core.state import ActorState, ConversationTurn, PerformancePhase
 from src.core.age_engine import AgeEngine
 from src.core.registry import (
@@ -638,9 +639,11 @@ class Orchestrator:
         Generate a response and deliver it: stream text to the console,
         speak it through TTS. Shared by text and voice modes.
 
-        With tts.streaming enabled, sentences are synthesized and played
-        while the LLM is still generating (overlapping pipeline). Otherwise
-        the full response is synthesized after generation completes.
+        With tts.streaming enabled, the reply is cut into chunks (sentences;
+        optionally long ones at commas too — see TTSChunker) that are
+        synthesized and played while the LLM is still generating
+        (overlapping pipeline).
+        Otherwise the full response is synthesized after generation completes.
 
         Returns the full response text.
         """
@@ -679,15 +682,35 @@ class Orchestrator:
             response = None
 
             # Real-time TTS pipeline state
-            tts_sentence_buf = ""     # Accumulates clean text for TTS
-            tts_queue = asyncio.Queue()  # Sentences ready for TTS
+            tts_config = self.config.get("tts", {})
+            chunker = TTSChunker(   # Decides where the reply is cut for TTS
+                comma_min_chars=tts_config.get("chunk_comma_min_chars", 0),
+                max_chars=tts_config.get("chunk_max_chars", 200),
+            )
+            tts_queue = asyncio.Queue()  # Chunks ready for TTS
             tts_task = None           # Background task playing audio
-            tts_sentence_count = 0    # Sentences accumulated in buffer
-            tts_chunk_size = self.config.get("tts", {}).get("chunk_sentences", 1)
             tts_metrics = []          # Accumulate TTS logs to print at end
             # Live [emoción] tag stripping (the end-of-stream parse in the
             # provider is the authority for state; this one feeds display+TTS)
             tag_filter = EmotionTagFilter()
+
+            async def queue_for_tts(piece: str) -> None:
+                nonlocal tts_task
+                # Sanitized: emojis/tags/actions derail the TTS
+                # (a lone emoji synthesizes as CJK babble)
+                text = sanitize_for_tts(piece)
+                if not text:
+                    return
+                await tts_queue.put(text)
+                # Start TTS consumer if not running
+                if tts_task is None or tts_task.done():
+                    voice_profile = self._get_voice_profile()
+                    emotion_for_tts = tag_filter.emotion or self.state.current_emotion
+                    tts_task = asyncio.create_task(
+                        self._tts_consumer(
+                            tts_queue, voice_profile, emotion_for_tts, tts_metrics
+                        )
+                    )
 
             async for chunk in self.process_input_streaming(user_input):
                 if isinstance(chunk, LLMResponse):
@@ -709,47 +732,20 @@ class Orchestrator:
                     # markup off: brackets in the line ("[risas]") are dialogue,
                     # not Rich tags — Rich would silently swallow them
                     console.print(clean, end="", markup=False, highlight=False)
-                    tts_sentence_buf += clean
-
-                # Check for sentence boundary → count and queue for TTS
-                if tts_streaming and tts_sentence_buf.rstrip().endswith((".", "!", "?")):
-                    tts_sentence_count += 1
-                    if tts_sentence_count >= tts_chunk_size:
-                        # Sanitized: emojis/tags/actions derail the TTS
-                        # (a lone emoji synthesizes as CJK babble)
-                        sentence = sanitize_for_tts(tts_sentence_buf)
-                        tts_sentence_buf = ""
-                        tts_sentence_count = 0
-                        if sentence:
-                            await tts_queue.put(sentence)
-                            # Start TTS consumer if not running
-                            if tts_task is None or tts_task.done():
-                                voice_profile = self._get_voice_profile()
-                                emotion_for_tts = tag_filter.emotion or self.state.current_emotion
-                                tts_task = asyncio.create_task(
-                                    self._tts_consumer(
-                                        tts_queue, voice_profile, emotion_for_tts, tts_metrics
-                                    )
-                                )
+                    if tts_streaming:
+                        for piece in chunker.feed(clean):
+                            await queue_for_tts(piece)
 
             # Release any text still held by the tag filter — short untagged
             # replies would otherwise never reach the console or TTS
             tail = tag_filter.flush()
             if tail:
                 console.print(tail, end="", markup=False, highlight=False)
-                tts_sentence_buf += tail
 
-            # Flush remaining text to TTS (sanitized — see above)
-            if tts_streaming and sanitize_for_tts(tts_sentence_buf):
-                await tts_queue.put(sanitize_for_tts(tts_sentence_buf))
-                if tts_task is None or tts_task.done():
-                    voice_profile = self._get_voice_profile()
-                    emotion_for_tts = tag_filter.emotion or self.state.current_emotion
-                    tts_task = asyncio.create_task(
-                        self._tts_consumer(
-                            tts_queue, voice_profile, emotion_for_tts, tts_metrics
-                        )
-                    )
+            # Flush the last chunk to TTS
+            if tts_streaming:
+                for piece in chunker.feed(tail) + chunker.flush():
+                    await queue_for_tts(piece)
 
             # Newline after streaming completes
             console.print()
@@ -769,7 +765,7 @@ class Orchestrator:
 
             full_response = response.text if response else ""
 
-            # Wait for TTS to finish all queued sentences
+            # Wait for TTS to finish all queued chunks
             if tts_streaming and tts_task and not tts_task.done():
                 await tts_queue.put(None)  # Sentinel to stop consumer
                 await tts_task
@@ -871,7 +867,6 @@ class Orchestrator:
         """
         import sounddevice as sd
         import numpy as np
-        from collections import deque
         from rich.console import Console
         from rich.panel import Panel
 
@@ -889,17 +884,27 @@ class Orchestrator:
         sample_rate = audio_config.get("sample_rate", 16000)
         channels = audio_config.get("channels", 1)
 
-        # VAD config
+        # VAD config (no keep_threshold = one threshold for start and end)
         vad_config = self.config.get("stt", {}).get("vad", {})
         energy_threshold = vad_config.get("energy_threshold", 0.02)
+        keep_threshold = vad_config.get("keep_threshold", energy_threshold)
         silence_ms = vad_config.get("silence_duration_ms", 800)
-        silence_frames = int(silence_ms / 1000 * sample_rate)
-        preroll_ms = vad_config.get("preroll_ms", 300)
+        block_duration_ms = 100  # Process audio in 100ms blocks
+        detector = EndpointDetector(
+            sample_rate=sample_rate,
+            block_ms=block_duration_ms,
+            start_threshold=energy_threshold,
+            keep_threshold=keep_threshold,
+            silence_ms=silence_ms,
+            preroll_ms=vad_config.get("preroll_ms", 300),
+            max_turn_ms=vad_config.get("max_turn_ms", 60000),
+        )
 
         console.print(Panel.fit(
             "[bold magenta]🎭 Indira — Voice Mode[/bold magenta]\n"
             "[dim]Speak into your microphone. Press Ctrl+C to quit.[/dim]\n"
-            f"[dim]VAD threshold: {energy_threshold} | Silence: {silence_ms}ms[/dim]",
+            f"[dim]VAD start: {energy_threshold} | keep: {keep_threshold} | "
+            f"Silence: {silence_ms}ms[/dim]",
             border_style="magenta",
         ))
 
@@ -922,9 +927,7 @@ class Orchestrator:
             loop.call_soon_threadsafe(audio_queue.put_nowait, indata.copy())
 
         # Open mic stream
-        block_duration_ms = 100  # Process audio in 100ms blocks
         block_size = int(sample_rate * block_duration_ms / 1000)
-        preroll_maxlen = max(1, round(preroll_ms / block_duration_ms))
 
         try:
             stream = sd.InputStream(
@@ -945,16 +948,9 @@ class Orchestrator:
 
         try:
             while True:
-                # ── Phase 1: Wait for speech ──
-                speech_buffer: list[np.ndarray] = []
-                # Rolling ~300ms of pre-speech audio: speech onsets fade in
-                # below the energy threshold, so without this the first
-                # syllable gets clipped and Whisper mis-hears the line start.
-                preroll: deque[np.ndarray] = deque(maxlen=preroll_maxlen)
-                is_speaking = False
-                silence_counter = 0
-
-                while True:
+                # ── Phase 1: Wait for speech, until the speaker is done ──
+                utterance = None
+                while utterance is None:
                     try:
                         chunk = await asyncio.wait_for(audio_queue.get(), timeout=0.5)
                     except asyncio.TimeoutError:
@@ -963,55 +959,33 @@ class Orchestrator:
                     if chunk is None:
                         break
 
-                    energy = np.sqrt(np.mean(chunk ** 2))
+                    was_speaking = detector.is_speaking
+                    utterance = detector.feed(chunk)
+                    if detector.is_speaking and not was_speaking:
+                        console.print("\r[yellow]🎤 Hearing you...[/yellow]   ", end="")
 
-                    if energy > energy_threshold:
-                        if not is_speaking:
-                            is_speaking = True
-                            silence_counter = 0
-                            preroll_samples = sum(c.size for c in preroll)
-                            speech_buffer.extend(preroll)
-                            preroll.clear()
-                            console.print("\r[yellow]🎤 Hearing you...[/yellow]   ", end="")
-                        speech_buffer.append(chunk)
-                        silence_counter = 0
-                    elif not is_speaking:
-                        preroll.append(chunk)
-                    elif is_speaking:
-                        # Still recording but silence detected
-                        speech_buffer.append(chunk)
-                        silence_counter += len(chunk)
-
-                        if silence_counter >= silence_frames:
-                            # Enough silence — speech ended
-                            break
-
-                if not speech_buffer:
+                if utterance is None:
                     continue
 
                 # ── Anti-hallucination checks ──
-                # Checks run on the speech portion only — the quiet pre-roll
-                # would otherwise pad blips past the duration check and drag
-                # the average energy down.
-                audio_data = np.concatenate(speech_buffer).flatten()
-                speech_only = audio_data[preroll_samples:]
-                duration_s = len(speech_only) / sample_rate
+                # Judged on the speech itself (Utterance.speech): pre-roll and
+                # trailing silence would pad a blip past the duration check
+                # and drag a short, soft answer ("sí") under the energy check.
 
-                # 1. Minimum speech duration — ignore noise blips
-                if duration_s < 0.5:
+                # 1. Minimum speech duration — ignore one-block noise blips
+                if utterance.speech_seconds < 0.15:
                     console.print("\r[green]🎤 Listening...[/green]", end="")
                     continue
 
-                # 2. Average energy of the speech portion — reject near-silent audio
-                avg_energy = np.sqrt(np.mean(speech_only ** 2))
-                if avg_energy < energy_threshold * 0.7:
-                    logger.debug(f"Audio too quiet (energy={avg_energy:.4f}), skipping")
+                # 2. Average energy of the speech — reject near-silent audio
+                if utterance.speech_rms < energy_threshold * 0.7:
+                    logger.debug(f"Audio too quiet (energy={utterance.speech_rms:.4f}), skipping")
                     console.print("\r[green]🎤 Listening...[/green]", end="")
                     continue
 
                 # ── Phase 2: Transcribe ──
                 console.print("\r[cyan]💭 Transcribing...[/cyan]   ", end="")
-                audio_bytes = audio_data.astype(np.float32).tobytes()
+                audio_bytes = utterance.audio.astype(np.float32).tobytes()
 
                 try:
                     transcription = await self.stt.transcribe(audio_bytes, sample_rate)
@@ -1023,17 +997,13 @@ class Orchestrator:
 
                 text = transcription.text.strip()
 
-                # 3. Filter known Whisper hallucination patterns
-                _hallucination_patterns = [
-                    "thank you", "thanks for watching", "subscribe",
-                    "subtítulos", "amara.org", "gracias por ver",
-                    "música", "aplausos", "risas",
-                ]
+                # 3. Leftover junk. Non-speech and Whisper's stock phrases
+                # ("¡Suscríbete!" for a clap) were already dropped by the STT
+                # provider — they're Whisper's quirks, so they live with it
                 text_lower = text.lower()
                 if (
                     not text
                     or len(text) < 2
-                    or any(p in text_lower for p in _hallucination_patterns)
                     or text_lower == text_lower[0] * len(text_lower)  # repeated single char
                 ):
                     if text:
@@ -1061,6 +1031,7 @@ class Orchestrator:
                             audio_queue.get_nowait()
                         except asyncio.QueueEmpty:
                             break
+                    detector.reset()
                     stream.start()
 
                 console.print("\n[green]🎤 Listening...[/green]", end="")
@@ -1080,7 +1051,7 @@ class Orchestrator:
         metrics: list[str] | None = None,
     ) -> None:
         """
-        Background task that consumes sentences from the queue and plays audio.
+        Background task that consumes text chunks from the queue and plays audio.
 
         Overlaps synthesis and playback: generates next chunk while current plays.
         """

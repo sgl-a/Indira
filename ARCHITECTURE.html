@@ -453,7 +453,7 @@
 <h2 id="detailed-component-data-flows">Detailed Component Data Flows</h2>
 <h3 id="1-perception-pipeline">1. Perception Pipeline</h3>
 <blockquote class="note note-partial">
-<p>🟡 <strong>Partial.</strong> Audio path ✅ — mic capture, energy-based VAD with pre-roll, mlx-whisper STT, and anti-hallucination filtering (<code>orchestrator.run_voice_mode</code>, around lines 986–1034). Vision path 🔜 not built. <strong>Speaker identification is not implemented</strong> — <code>TranscriptionResult.speaker_id</code> and <code>ConversationTurn.speaker_id</code> exist and are plumbed through persistence, but nothing populates them.</p>
+<p>🟡 <strong>Partial.</strong> Audio path ✅ — mic capture, energy-based VAD with two thresholds and pre-roll (<code>vad.EndpointDetector</code>), mlx-whisper STT with anti-hallucination filtering (<code>WhisperSTTProvider</code>), and noise gates (<code>orchestrator.run_voice_mode</code>). Vision path 🔜 not built. <strong>Speaker identification is not implemented</strong> — <code>TranscriptionResult.speaker_id</code> and <code>ConversationTurn.speaker_id</code> exist and are plumbed through persistence, but nothing populates them.</p>
 </blockquote>
 <figure class="diagram"><pre class="diagram-src">flowchart LR
     subgraph INPUT [&quot;Raw Input&quot;]
@@ -469,7 +469,7 @@
     end
 
     subgraph AUDIO [&quot;Audio Processing&quot;]
-        VAD[&quot;Voice Activity ✅&lt;br/&gt;(energy + preroll)&quot;]
+        VAD[&quot;Voice Activity ✅&lt;br/&gt;(energy, start/keep + preroll)&quot;]
         STT[&quot;Whisper STT ✅&quot;]
         FILTER[&quot;Hallucination ✅&lt;br/&gt;Filter&quot;]
         SPEAKER_ID[&quot;Speaker ID 🔜&quot;]
@@ -484,8 +484,9 @@
     MIC --&gt; VAD --&gt; STT --&gt; FILTER --&gt; SPEECH_CTX
     FILTER -.-&gt; SPEAKER_ID -.-&gt; SPEECH_CTX
 </pre></figure>
-<p><strong>Anti-hallucination filtering</strong> is worth noting because it is not in the original design. Whisper emits characteristic phantom phrases on silence or noise (&quot;thank you for watching&quot;, subtitle credits). These are filtered before reaching the orchestrator — without it, room noise generates conversational turns and the character responds to nobody.</p>
-<p><strong>Audio parameters</strong> (<code>config/default.yaml</code>): 16 kHz mono, <code>energy_threshold 0.03</code>, <code>silence_duration_ms 800</code>, <code>preroll_ms 300</code>. Language pinned to <code>es</code>.</p>
+<p><strong>Anti-hallucination filtering</strong> is worth noting because it is not in the original design. Whisper emits characteristic phantom phrases on silence or noise — forced to Spanish, a clap or a lighter click comes back as &quot;¡Suscríbete!&quot;. Without filtering, room noise generates conversational turns and the character responds to nobody. The filter lives in the Whisper provider (<code>WhisperSTTProvider._speech_text</code>), since it's Whisper's quirk: it drops segments Whisper itself rates as non-speech (<code>no_speech_prob</code> above <code>stt.no_speech_threshold</code>, 0.7 — measured claps 0.79–0.85 vs real short answers ≤0.56), and drops its stock phrases only when they are the <em>whole</em> transcription, so real dialogue that contains one (&quot;me encanta esta música&quot;) survives.</p>
+<p><strong>Turn detection uses two thresholds.</strong> A turn starts when a 100 ms block is louder than <code>energy_threshold</code>, but once she's listening only blocks quieter than the lower <code>keep_threshold</code> count as silence. With a single threshold, soft syllables and a dropping voice counted as silence and the speaker was cut off mid-sentence. The noise gates (minimum duration, minimum energy) judge only the speech itself, without the pre-roll and trailing silence, so a short, soft &quot;sí&quot; isn't discarded. Levels depend on the mic, its input volume and the room, so they must be calibrated on the show rig.</p>
+<p><strong>Audio parameters</strong> (<code>config/default.yaml</code>, calibrated 2026-10-15 on the MacBook's built-in mic): 16 kHz mono, <code>energy_threshold 0.01</code>, <code>keep_threshold 0.005</code>, <code>silence_duration_ms 1200</code> (800 cut a measured ~1 s mid-sentence pause), <code>max_turn_ms 60000</code> (safety valve if room noise sits above <code>keep_threshold</code>), <code>preroll_ms 300</code>. Language pinned to <code>es</code>.</p>
 <hr />
 <h3 id="2-cognition-pipeline">2. Cognition Pipeline</h3>
 <blockquote class="note note-ok">
@@ -566,7 +567,7 @@ messages:       [ {role: &quot;user&quot;,      content: &quot;...&quot;},
     end
 
     subgraph TTS_PIPELINE [&quot;🗣️ Voice Synthesis ✅&quot;]
-        CHUNK[&quot;Sentence chunker&lt;br/&gt;(chunk_sentences: 2)&quot;]
+        CHUNK[&quot;TTSChunker&lt;br/&gt;(one sentence per chunk)&quot;]
         SANITIZE[&quot;sanitize_for_tts()&lt;br/&gt;strip emoji/tags/actions&quot;]
         VOICE_SELECT[&quot;Voice Selector 🟡&lt;br/&gt;(one voice today)&quot;]
         INSTRUCT[&quot;Emotion → NL&lt;br/&gt;delivery instruction&quot;]
@@ -605,6 +606,7 @@ messages:       [ {role: &quot;user&quot;,      content: &quot;...&quot;},
     AV_SYNC -.-&gt; PROJECTOR
 </pre></figure>
 <p><strong>TTS input sanitization ✅</strong> is a hard contract, not a nicety. Emojis, inline <code>[tags]</code>, and <code>*actions*</code> derail Qwen3-TTS into wrong-language output — Spanish text containing an emoji has produced CJK speech, verified by closed-loop probing. <strong>All</strong> text reaching any TTS provider passes through <code>text_filters.sanitize_for_tts()</code> first, and synthesis is skipped when it returns <code>&quot;&quot;</code>. The console still shows the original text, so the operator sees what she &quot;wrote&quot; while the speaker hears only what is speakable.</p>
+<p><strong>Chunking ✅.</strong> With <code>tts.streaming</code> on, <code>text_filters.TTSChunker</code> cuts the streamed reply at every sentence end, so the first sentence plays while the rest is still being generated. It never cuts inside a <code>[tag]</code> or <code>*action*</code> (sanitization strips whole spans only — half a span would be spoken), and a run with no punctuation is cut at a space after <code>tts.chunk_max_chars</code>. Cutting long sentences at commas is built but off (<code>tts.chunk_comma_min_chars: 0</code>): in probing, chunks ending mid-sentence sometimes made Qwen3-TTS keep talking past the comma.</p>
 <p><strong>Critical timing constraints</strong> (targets; only the first is currently measurable):</p>
 <div class="table-wrap"><table>
 <thead>
@@ -862,7 +864,7 @@ messages:       [ {role: &quot;user&quot;,      content: &quot;...&quot;},
     loop While generating
         L--&gt;&gt;O: token
         O-&gt;&gt;O: strip [emoción] / #lt;think#gt; incrementally
-        O-&gt;&gt;O: accumulate into 2-sentence chunk
+        O-&gt;&gt;O: TTSChunker: cut at each sentence end
         alt Chunk complete
             O-&gt;&gt;T: sanitize_for_tts() → synthesize
             T-&gt;&gt;W: audio to speakers (afplay)
@@ -1039,8 +1041,16 @@ messages:       [ {role: &quot;user&quot;,      content: &quot;...&quot;},
 <td><code>orchestrator._append_transcript</code>, <code>_load_transcript</code>, <code>_persist_performance_state</code></td>
 </tr>
 <tr>
-<td>Voice mode + VAD + filtering</td>
+<td>Voice mode + noise gates</td>
 <td><code>orchestrator.run_voice_mode</code></td>
+</tr>
+<tr>
+<td>Hallucination filter (Whisper)</td>
+<td><code>whisper_provider.WhisperSTTProvider._speech_text</code></td>
+</tr>
+<tr>
+<td>VAD (turn start/end)</td>
+<td><code>vad.EndpointDetector</code></td>
 </tr>
 <tr>
 <td>Slash commands</td>
@@ -1061,6 +1071,10 @@ messages:       [ {role: &quot;user&quot;,      content: &quot;...&quot;},
 <tr>
 <td>TTS sanitization</td>
 <td><code>text_filters.sanitize_for_tts</code></td>
+</tr>
+<tr>
+<td>TTS chunking</td>
+<td><code>text_filters.TTSChunker</code></td>
 </tr>
 <tr>
 <td>Provider selection</td>

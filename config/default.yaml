@@ -41,11 +41,20 @@ stt:
   provider: "whisper"     # mlx-whisper (Apple Silicon optimized)
   model: "small"          # tiny (~39MB) | base (~74MB) | small (~244MB) | medium (~769MB) | turbo (~809MB) | large (~1.5GB)
   language: "es"          # null = auto-detect | "es" = force Spanish | "en" = force English
-  # Voice activity detection
+  # Drop what Whisper itself rates as non-speech (a clap transcribes as "¡Suscríbete!").
+  # Measured 2026-10-16: claps/lighter clicks 0.79-0.85, real short answers 0.09-0.18
+  # (TTS-voiced ones up to 0.56). Lower = stricter, but short soft words go first.
+  no_speech_threshold: 0.7
+  # Voice activity detection (src/core/vad.py). Levels are RMS of 100 ms blocks and
+  # depend on the mic, its input volume and the room — calibrated 2026-10-15 on the
+  # MacBook's built-in mic at macOS input volume 30: room ~0.001-0.002, speech
+  # ~0.007-0.02. Recalibrate on the show rig.
   vad:
-    energy_threshold: 0.03
-    silence_duration_ms: 800
-    preroll_ms: 300         # audio kept from before speech onset (avoids clipping soft first syllables)
+    energy_threshold: 0.01    # a turn STARTS when a block is louder than this
+    keep_threshold: 0.005     # once speaking, only quieter than this counts as silence (keeps soft speech in the turn); must stay above room noise
+    silence_duration_ms: 1200 # this much silence ends the turn — adds directly to her response time. 800 cut a measured ~1 s mid-sentence pause
+    max_turn_ms: 60000        # safety: end a turn this long even without silence (room noise above keep_threshold)
+    preroll_ms: 300           # audio kept from before speech onset (avoids clipping soft first syllables)
 
 # ─── Language Model (Brain) ───
 llm:
@@ -97,8 +106,14 @@ tts:
   #   Male:   ryan, aiden, eric, dylan, uncle_fu
   default_voice:
     speed: 1.0
-  streaming: true         # TTS during LLM generation (true = speak sentence-by-sentence, false = speak full response at once). Applies to text AND voice mode.
-  chunk_sentences: 2      # Number of sentences per TTS chunk (1 = lowest latency, 2-3 = smoother audio)
+  streaming: true         # TTS during LLM generation (true = speak chunk by chunk while she's still generating, false = speak full response at once). Applies to text AND voice mode.
+  # Where streaming TTS cuts the reply (text_filters.TTSChunker). Every sentence
+  # end cuts; each chunk is synthesized on its own, so smaller chunks mean a
+  # sooner first sound but more seams in the intonation. Tune by ear.
+  chunk_comma_min_chars: 0    # also cut at , ; : or "..." once the chunk is this long (0 = sentence ends only).
+                              # Off: in probing (2026-10-15) ~3% of chunks ending mid-sentence ran away — the
+                              # model keeps "speaking" past the comma — vs 0% for sentence ends. See TODO.md.
+  chunk_max_chars: 200        # no punctuation by this length → cut at a space (0 = no limit)
 
 # ─── Memory ───
 memory:

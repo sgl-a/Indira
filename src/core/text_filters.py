@@ -7,7 +7,8 @@ Qwen3-TTS (and TTS models generally) derail on non-speech tokens: probing
 showed a lone emoji synthesizes as CJK babble, "[risas]" is read aloud as
 English "Recess", and "*se rie*" comes out garbled. Anything the LLM emits
 that isn't speakable words must be stripped before synthesis - the console
-still displays the original text.
+still displays the original text. TTSChunker decides where the streaming
+TTS cuts the reply, and never cuts through a span the stripping removes.
 """
 
 import re
@@ -28,6 +29,16 @@ _EMOJI = re.compile(
     "\uFE0E\uFE0F\u200D"    # variation selectors & zero-width joiner
     "]+"
 )
+
+# Where TTSChunker may cut. A punctuation boundary only counts once the
+# character after it has arrived and is whitespace: that keeps "3,5" and
+# "2.000" whole, and an ellipsis streamed as "." "." "." is seen complete
+# before it's classified. Closing quotes/parens stay with the punctuation
+# they follow. A newline (paragraph break) cuts before itself.
+_CLOSERS = "\"'\u201D\u2019\u00BB)"
+_CHUNK_BOUNDARY = re.compile(r"(?:[.!?\u2026]+|[,;:])[\"'\u201D\u2019\u00BB)]*(?=\s)|\n")
+_LETTER = re.compile(r"[^\W\d_]")
+_WHITESPACE = re.compile(r"\s")
 
 
 class EmotionTagFilter:
@@ -85,6 +96,97 @@ class EmotionTagFilter:
         out, self._buf = self._buf, ""
         self._resolved = True
         return out
+
+
+class TTSChunker:
+    """
+    Cuts the streamed reply into the pieces the streaming TTS synthesizes.
+
+    Each piece is synthesized on its own, so the cut points trade latency
+    for seams: nothing plays until the first piece is complete, and every
+    cut resets the voice's intonation. The rules:
+
+    - every sentence end (. ? ! or a paragraph break) cuts: one sentence
+      per piece at most;
+    - a pause (, ; : or an ellipsis) cuts only once the piece has reached
+      `comma_min_chars` (0 = never, the default). This gets a long first
+      sentence speaking early, but Qwen3-TTS sometimes keeps "speaking"
+      past a chunk that ends mid-sentence (~3% in probing, 2026-10-15,
+      vs 0% at sentence ends) — off until that's solved;
+    - a piece that reaches `max_chars` (0 = no limit) with neither is cut
+      at the last space within the limit;
+    - never inside a [tag] or *action*: sanitize_for_tts strips whole
+      spans only, so half of one would be spoken aloud;
+    - never a piece without a letter (a list's "1.", a stray "...").
+
+    Pieces come back verbatim, whitespace and markup included, and nothing
+    is dropped but trailing whitespace: callers sanitize each piece and
+    skip it when that returns "".
+    """
+
+    def __init__(self, comma_min_chars: int = 0, max_chars: int = 200) -> None:
+        self._comma_min_chars = comma_min_chars or 0
+        self._max_chars = max_chars or 0
+        self._buf = ""
+
+    def feed(self, text: str) -> list[str]:
+        """Feed streamed text, get back the pieces it completed (may be [])."""
+        self._buf += text
+        pieces = []
+        while (cut := self._next_cut()) is not None:
+            pieces.append(self._buf[:cut])
+            self._buf = self._buf[cut:]
+        return pieces
+
+    def flush(self) -> list[str]:
+        """End of stream: release whatever is left as the last piece."""
+        rest, self._buf = self._buf, ""
+        return [rest] if rest.strip() else []
+
+    def _next_cut(self) -> int | None:
+        """Position of the first allowed cut in the buffer, or None."""
+        buf = self._buf
+        boundary = None
+        for m in _CHUNK_BOUNDARY.finditer(buf):
+            if m.group() == "\n":
+                cut, pause = m.start(), False
+            else:
+                cut, pause = m.end(), self._is_pause(m.group().rstrip(_CLOSERS))
+            if pause and (not self._comma_min_chars or cut < self._comma_min_chars):
+                continue
+            if self._can_cut(buf[:cut]):
+                boundary = cut
+                break
+
+        if boundary is not None and (not self._max_chars or boundary <= self._max_chars):
+            return boundary
+        if self._max_chars and len(buf) > self._max_chars:
+            # No boundary in time: cut at the last space within the limit
+            spaces = [m.start() for m in _WHITESPACE.finditer(buf, 0, self._max_chars + 1)]
+            for pos in reversed(spaces):
+                if self._can_cut(buf[:pos]):
+                    return pos
+        # Either nothing to cut yet, or nothing cuttable within the limit
+        # (a run of markup): then the next boundary, however far
+        return boundary
+
+    @staticmethod
+    def _is_pause(punct: str) -> bool:
+        """, ; : and ellipses are pauses; . ? ! end the sentence."""
+        if punct[-1] in "?!":
+            return False
+        return punct[-1] in ",;:…" or ".." in punct
+
+    @staticmethod
+    def _can_cut(piece: str) -> bool:
+        """A piece may end here: it has a word, and no span is left open."""
+        if not _LETTER.search(piece):
+            return False
+        # Inside an unclosed [tag]?
+        if piece.rfind("[") > piece.rfind("]"):
+            return False
+        # Inside an *action*? (sanitize's spans never cross a newline)
+        return piece[piece.rfind("\n") + 1:].count("*") % 2 == 0
 
 
 def sanitize_for_tts(text: str) -> str:
