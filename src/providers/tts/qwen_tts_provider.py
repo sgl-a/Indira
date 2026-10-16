@@ -215,8 +215,6 @@ class QwenTTSProvider(TTSProvider):
         Returns (audio, sample_rate, frames generated); frames reaching
         `max_frames` means the model never stopped on its own.
         """
-        import mlx.core as mx
-
         if not self._model:
             raise RuntimeError("Qwen3-TTS not initialized")
 
@@ -244,10 +242,9 @@ class QwenTTSProvider(TTSProvider):
             frames += result.token_count
             audio = result.audio
             if hasattr(audio, "tolist"):
-                # Convert mlx array to numpy
+                # Convert mlx array to numpy (no mlx import needed, so this
+                # module also loads where MLX doesn't exist, e.g. Linux CI)
                 audio = np.array(audio, dtype=np.float32)
-            elif isinstance(audio, mx.array):
-                audio = np.array(audio.tolist(), dtype=np.float32)
             audio_chunks.append(audio)
             if hasattr(result, "sample_rate"):
                 sample_rate = result.sample_rate
